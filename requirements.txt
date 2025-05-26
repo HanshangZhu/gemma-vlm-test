@@ -1,0 +1,17 @@
+# Core VLM requirements
+torch==2.5.1+cu121
+torchvision==0.20.1+cu121
+transformers==4.52.3
+sentencepiece==0.2.0
+safetensors==0.5.3
+bitsandbytes==0.41.3
+
+# Vision + image processing
+Pillow==10.4.0
+
+# Optional UI
+gradio==5.31.0
+
+# CLI, data tools
+tqdm
+numpy
