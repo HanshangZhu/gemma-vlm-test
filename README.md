@@ -10,7 +10,7 @@ A hand-built modular vision-language model (VLM) pipeline combining:
 
 #### 1. Clone and create a Conda environment
 ```bash
-git clone https://github.com/yourusername/gemma-vlm
+git clone https://github.com/HanshangZhu/gemma-vlm
 cd gemma-vlm
 conda create -n gemma-vlm-test python=3.10
 conda activate gemma-vlm-test
