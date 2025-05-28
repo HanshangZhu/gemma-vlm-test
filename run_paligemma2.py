@@ -29,7 +29,7 @@ model = PaliGemmaForConditionalGeneration.from_pretrained(
 model.eval()
 
 # Load and resize image
-image_path = "/home/hz/Pictures/Screenshots/Screenshot from 2025-05-28 01-25-51.png"
+image_path = "test_imgs/task_clean_whiteboard.png"
 image = Image.open(image_path).convert("RGB")
 img_resized = image.resize((224, 224))  # Optional for visualization
 img_resized.show()  # Display the image (optional)
