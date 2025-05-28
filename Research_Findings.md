@@ -7,4 +7,4 @@ Where an Image with white board and eraser is presented from the Gemini Robotics
 
 #### Script Takeaway
 - We discovered that Google's PaliGemma2 VLM, while generally preserves image captioning ability, lacks fundamental spatial awaress possibly due to lack of dataset on Robotic Manipulation.
-- Need to **gather robotics finetuning dataset** (OpenX subset?) or **download pretrained VLM backbone** (LlaVA Backbone from iTnyVLA)
+- Need to **gather robotics finetuning dataset** (OpenX subset?) or **download pretrained VLM backbone** (LlaVA Backbone from TinyVLA)
