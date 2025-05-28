@@ -36,21 +36,18 @@ img_resized.show()  # Display the image (optional)
 
 ################################################################################
 # Prepare multimodal prompt with <image> token
-prompt = '''<image> Produce a chain of thought reasoning for the following image and answer the question:
-Given your end effector can hold the eraser, and you can move it in any direction.
-Given the image, if you are a robotic arm, how would you erase the whiteboard?
-identify the steps you would take to accomplish this task, considering the tools and actions available to you.
+prompt = """<image> Given the tools visible, reason step-by-step how to use the eraser to clean the whiteboard. 
+Explain each robotic action. First answer what the eraser is, where it is located, and how to use it."""
 
-'''
 ######################################################################
 
 # Preprocess inputs
 inputs = processor(images=image, text=prompt, return_tensors="pt").to(model.device)
-print(inputs.keys) # check input keys
+#print(inputs.keys) # check input keys
 
 # Generate output
 with torch.no_grad():
-    output_ids = model.generate(**inputs, max_new_tokens=2000, temperature=0)
+    output_ids = model.generate(**inputs, max_new_tokens=2000, temperature=0.2)
 
 # Decode result
 caption = processor.batch_decode(output_ids, skip_special_tokens=True)[0]
