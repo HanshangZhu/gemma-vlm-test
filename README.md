@@ -19,7 +19,7 @@ pip install -r requirements.txt
 ```
 
 #### 2. HuggingFace Cache Management
-**For inference** (simply calling models and generate output with prompts) ,we utilise *HuggingFace Transformers* Library which **downloads and caches model weights locally**. Given the goal of this repo, the process involves trialing with multiple VLM backbone and this process could be unresourceful and rather inefficient
+**For inference** (simply calling models and generate output with prompts) ,we utilise *HuggingFace Transformers* Library which **downloads and caches model weights locally**. Given the goal of this repo, the process involves trialing with multiple VLM backbone and this process could be unresourceful and rather inefficient.
 
 Hence, we recommend the following commands if you wish to free up space:
 - *To see which models are currently downloaded*:
