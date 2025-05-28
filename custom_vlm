@@ -16,9 +16,11 @@ class CustomVLM(nn.Module):
         self.image_encoder = SiglipVisionModel.from_pretrained(image_encoder_ckpt)
         self.image_encoder.eval()
 
-        # Projection head: 768 -> 2048
-        self.proj = nn.Linear(768, 2048)
-        self.proj.load_state_dict(torch.load(proj_ckpt_path))
+        # Projection head: 768 -> 1152
+        self.proj = nn.Linear(768, 1152)
+        if proj_ckpt_path:
+            print(f"Loading projection head from {proj_ckpt_path}")
+            self.proj.load_state_dict(torch.load(proj_ckpt_path))
         self.proj.eval()
 
         # Load Gemma decoder (language model)
@@ -63,11 +65,11 @@ class CustomVLM(nn.Module):
 
 
 if __name__ == "__main__":
-    model = CustomVLM()
+    model = CustomVLM(proj_ckpt_path=None)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
 
-    image_path = "example.jpg"  # Replace with actual image
+    image_path = "test_imgs/task_clean_whiteboard.png"  # Replace with actual image
     prompt = "Describe the image."
     caption = model.infer_from_path(image_path, prompt, device=device)
     print("Generated Caption:", caption)
