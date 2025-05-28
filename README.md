@@ -5,7 +5,7 @@
 A hand-built modular vision-language model (VLM) pipeline combining:
 - **SigLIP** as image encoder (`google/siglip-base-patch16-224`)
 - **Linear projection** from 768 → 2048
-- **Gemma 2B** as language decoder (`google/gemma-1.1-2b-it`)
+- **Gemma 3 - 1B** as language decoder (`google/gemma-3-1b-it`)
 
 ### 🔧 Installation
 
