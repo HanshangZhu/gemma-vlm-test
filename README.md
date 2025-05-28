@@ -19,16 +19,16 @@ pip install -r requirements.txt
 ```
 
 #### 2. HuggingFace Cache Management
-For inference (simply calling models and generate output with prompts) ,we utilise HuggingFace Transformers Library which downloads and caches model weights locally in your system. Given the goal of this repo, the process involves trialing with multiple VLM backbone and this process *could be cumbersome*
+**For inference** (simply calling models and generate output with prompts) ,we utilise *HuggingFace Transformers* Library which **downloads and caches model weights locally**. Given the goal of this repo, the process involves trialing with multiple VLM backbone and this process could be unresourceful and rather inefficient
 
 Hence, we recommend the following commands if you wish to free up space:
-*To see which models are currently downloaded*:
+- *To see which models are currently downloaded*:
 
 ```bash
 ls ~/.cache/huggingface/hub/
 ```
 
-Example Output:
+- *Example Output*:
 
 ```bash
 models--google--gemma-1.1-2b-it
@@ -36,7 +36,7 @@ models--google--siglip-base-patch16-224
 models--google--paligemma-3b-pt-224
 ```
 
-Selecting a model you wish to delete
+- *Selecting a model you wish to delete*
 ```bash
 rm -rf ~/.cache/huggingface/hub/models--google--siglip-base-patch16-224
 ```
