@@ -6,7 +6,7 @@ from transformers import (
     BitsAndBytesConfig
 )
 
-model_name = "google/paligemma-3b-pt-224"
+model_name = "google/paligemma-3b-mix-224"
 
 # Load processor
 processor = AutoProcessor.from_pretrained(model_name, use_fast=True)
