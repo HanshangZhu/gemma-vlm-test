@@ -1,6 +1,8 @@
 # Core VLM requirements
-torch==2.5.1+cu121
-torchvision==0.20.1+cu121
+--find-links https://download.pytorch.org/whl/nightly/cu121
+torch>=2.6.0
+torchvision>=0.17.0
+torchaudio>=2.6.0
 transformers==4.52.3
 sentencepiece==0.2.0
 safetensors==0.5.3
@@ -8,6 +10,7 @@ bitsandbytes==0.41.3
 
 # Vision + image processing
 Pillow==10.4.0
+opencv-python==4.11.0.86
 
 # Optional UI
 gradio==5.31.0
@@ -15,3 +18,8 @@ gradio==5.31.0
 # CLI, data tools
 tqdm
 numpy
+
+# Additional dependencies
+accelerate>=0.21.0
+einops>=0.6.1
+peft>=0.4.0
