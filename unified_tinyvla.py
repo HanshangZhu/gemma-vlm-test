@@ -27,12 +27,10 @@ class UnifiedTinyVLAModel(nn.Module):
         super().__init__()
         self.mode = mode
         
-        # FIX: We must use float32 to be compatible with the hardcoded bfloat16
-        # in the action head's SinusoidalPosEmb module.
+        # Use float32 for the diffusion process
         self.model_dtype = torch.float32
 
         # Load config and EXPLICITLY disable the base model's internal action head
-        # This prevents conflicts and ensures this wrapper has full control.
         config = LlavaPythiaConfig.from_pretrained(model_path)
         config.action_head_type = None
         
@@ -102,8 +100,7 @@ class UnifiedTinyVLAModel(nn.Module):
         # 3. Run this wrapper's own denoising loop if in action mode
         if self.mode == "action":
             with torch.no_grad():
-                # Take last token's hidden state as the global condition.
-                # Squeeze the sequence dimension as the UNet expects [B, H].
+                # Take last token's hidden state as the global condition
                 global_cond = hidden_states[:, -1]
 
                 if states is not None:
@@ -116,16 +113,19 @@ class UnifiedTinyVLAModel(nn.Module):
                 B = 1
                 Tp = self.num_queries
                 action_dim = 10
+                # Initialize with smaller values to prevent overflow
                 naction = torch.randn(
                     (B, Tp, action_dim), 
                     device=hidden_states.device, 
                     dtype=self.model_dtype
-                )
+                ) * 0.1  # Scale down initial noise
                 
-                # Move scheduler tensors to the correct device
-                self.noise_scheduler.alphas_cumprod = self.noise_scheduler.alphas_cumprod.to(hidden_states.device)
+                # Move scheduler tensors to the correct device and dtype
+                self.noise_scheduler.alphas_cumprod = self.noise_scheduler.alphas_cumprod.to(
+                    dtype=self.model_dtype, device=hidden_states.device
+                )
                 self.noise_scheduler.set_timesteps(self.num_inference_timesteps)
-                # Ensure timesteps are in long dtype for indexing
+                # Keep timesteps as long for indexing
                 timesteps = self.noise_scheduler.timesteps.to(dtype=torch.long, device=hidden_states.device)
 
                 for k in timesteps:
@@ -135,11 +135,15 @@ class UnifiedTinyVLAModel(nn.Module):
                         global_cond=global_cond, 
                         states=states
                     )
+                    # Clip predictions to prevent extreme values
+                    noise_pred = torch.clamp(noise_pred, min=-1.0, max=1.0)
                     naction = self.noise_scheduler.step(
                         model_output=noise_pred,
                         timestep=k,
                         sample=naction
                     ).prev_sample
+                    # Clip actions to prevent NaN propagation
+                    naction = torch.clamp(naction, min=-1.0, max=1.0)
             
             return {
                 'text_logits': text_logits,
@@ -159,15 +163,17 @@ def run_inference(image_path, prompt, model_path, mode="vlm"):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
-    # Model will be in float32 by default, which is what we need.
-    model = model.to(device) 
+    # Convert model to float32
+    model = model.to(device, dtype=torch.float32)
     
     image_processor = CLIPImageProcessor.from_pretrained(model_path)
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     
     image = Image.open(image_path)
-    # Ensure input tensors match the model's float32 dtype
-    image_tensor = image_processor(image, return_tensors="pt")["pixel_values"].to(device=device, dtype=model.model_dtype)
+    # Convert image tensor to float32
+    image_tensor = image_processor(image, return_tensors="pt")["pixel_values"].to(
+        device=device, dtype=torch.float32
+    )
     
     text_tokens = tokenizer(prompt, return_tensors="pt")
     input_ids = text_tokens["input_ids"].to(device)
@@ -179,13 +185,13 @@ def run_inference(image_path, prompt, model_path, mode="vlm"):
         if os.path.exists(stats_path):
             with open(stats_path, 'rb') as f:
                 norm_stats = pickle.load(f)
-            states = torch.zeros((1, 7), device=device, dtype=model.model_dtype)
-            qpos_mean = torch.tensor(norm_stats["qpos_mean"], device=device, dtype=model.model_dtype)
-            qpos_std = torch.tensor(norm_stats["qpos_std"], device=device, dtype=model.model_dtype)
+            states = torch.zeros((1, 7), device=device, dtype=torch.float32)
+            qpos_mean = torch.tensor(norm_stats["qpos_mean"], device=device, dtype=torch.float32)
+            qpos_std = torch.tensor(norm_stats["qpos_std"], device=device, dtype=torch.float32)
             states = (states - qpos_mean) / qpos_std
         else:
             print("Warning: norm_stats.pkl not found, using unnormalized states")
-            states = torch.zeros((1, 7), device=device, dtype=model.model_dtype)
+            states = torch.zeros((1, 7), device=device, dtype=torch.float32)
     
     with torch.no_grad():
         outputs = model(
