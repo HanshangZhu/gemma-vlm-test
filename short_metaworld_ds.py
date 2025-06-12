@@ -20,14 +20,17 @@ class ShortMWDataset(Dataset):
 
         # Load prompt dict
         import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            "tdesc", os.path.join(root, "task_description.py"))
+        # The root is deep inside the dataset, so go up to the dataset root
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        task_desc_path = os.path.join(script_dir, "datasets", "short-MetaWorld", "task_description.py")
+        spec = importlib.util.spec_from_file_location("tdesc", task_desc_path)
         tdesc = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(tdesc)
         prompt_dict = tdesc.PROMPT_DICT  # task → str
 
-        img_root = os.path.join(root, "short-MetaWorld", "img_only")
-        act_root = os.path.join(root, "short-MetaWorld", "r3m-processed", "r3m_MT10_20")
+        # Use the provided root directly for actions and images
+        act_root = root
+        img_root = os.path.join(os.path.dirname(root), "..", "img_only") # Assume img_only is parallel to r3m-processed
 
         for task in task_list:
             # Load actions from R3M processed .pkl file
@@ -46,9 +49,9 @@ class ShortMWDataset(Dataset):
                 print(f"Warning: {task_img_dir} not found")
                 continue
 
-            traj_dirs = sorted(glob.glob(f"{task_img_dir}/*"))
+            traj_dirs = sorted(glob.glob(f"{task_img_dir}/*"), key=lambda x: int(os.path.basename(x)))
             for ti, tdir in enumerate(traj_dirs):
-                img_paths = sorted(glob.glob(f"{tdir}/*.jpg"))
+                img_paths = sorted(glob.glob(f"{tdir}/*.jpg"), key=lambda x: int(os.path.splitext(os.path.basename(x))[0]))
                 if img_paths and ti < len(actions):
                     # Use the first image from each trajectory
                     ip = img_paths[0]
@@ -105,7 +108,9 @@ class ShortMWR3MDataset(Dataset):
 
     def _load_prompts(self, root):
         from importlib.util import spec_from_file_location, module_from_spec
-        spec = spec_from_file_location("tdesc", os.path.join(root, "task_description.py"))
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        task_desc_path = os.path.join(script_dir, "datasets", "short-MetaWorld", "task_description.py")
+        spec = spec_from_file_location("tdesc", task_desc_path)
         tdesc = module_from_spec(spec); spec.loader.exec_module(tdesc)
         return tdesc.PROMPT_DICT
 

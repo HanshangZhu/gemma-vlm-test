@@ -72,23 +72,29 @@ class UnifiedTinyVLAModel(nn.Module):
             states=states,
             actions=actions,  # Pass actions to base model for training
             is_pad=is_pad,    # Pass is_pad for training
-            return_dict=True
+            return_dict=True,
+            use_cache=False   # Disable KV cache when using gradient checkpointing
         )
         
-        # Extract loss from the outputs
-        # During training, the diffusion head returns loss in outputs.loss
+        # Extract loss and actions from the outputs
         loss = None
-        if hasattr(outputs, 'loss') and outputs.loss is not None:
-            # If outputs.loss is a dict (from diffusion head), extract the 'loss' key
-            if isinstance(outputs.loss, dict) and 'loss' in outputs.loss:
-                loss = outputs.loss['loss']
+        pred_actions = None
+        
+        if hasattr(outputs, 'loss'):
+            if isinstance(outputs.loss, dict):
+                # Diffusion head returns a dictionary with 'loss' and potentially other keys
+                loss = outputs.loss.get('loss', None)
+                pred_actions = outputs.loss.get('pred_actions', None)
             else:
                 loss = outputs.loss
         
-        # The base model's diffusion head will handle action prediction
+        if pred_actions is None and hasattr(outputs, 'actions'):
+            pred_actions = outputs.actions
+            
+        # Return a dictionary with all outputs
         return {
             'text_logits': outputs.logits if hasattr(outputs, 'logits') else None,
-            'actions': outputs.actions if hasattr(outputs, 'actions') else None,
+            'actions': pred_actions,
             'loss': loss
         }
 
