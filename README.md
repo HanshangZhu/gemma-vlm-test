@@ -238,3 +238,31 @@ The evaluation provides several key metrics:
 *short-MetaWorld*
 https://connecthkuhk-my.sharepoint.com/personal/liangzx_connect_hku_hk/_layouts/15/onedrive.aspx?id=%2Fpersonal%2Fliangzx%5Fconnect%5Fhku%5Fhk%2FDocuments%2Fshort%2DMetaWorld&ga=1
 
+# TinyVLA Model
+
+## Introduction
+The TinyVLA model is designed for performing tasks in the MetaWorld robotics simulator. It leverages advanced machine learning techniques to enable real-time GUI visualization of an agent's performance.
+
+## Installation
+To set up the environment and install necessary dependencies, follow these steps:
+1. Clone the repository: `git clone <repository-url>`
+2. Navigate to the project directory: `cd <project-directory>`
+3. Install dependencies: `pip install -r requirements.txt`
+
+## Usage
+To run the model, use the following command:
+```
+python eval_metaworld_rgb.py
+```
+Ensure that the necessary environment variables are set and the correct conda environment is activated.
+
+## Model Architecture
+The TinyVLA model consists of several components, including the LlavaPythiaForCausalLM class, which handles causal language modeling tasks with additional capabilities for processing multimodal inputs.
+
+## Training and Evaluation
+The model is trained using datasets from the MetaWorld simulator. Evaluation is performed using standard metrics to assess performance.
+
+## References
+- [TinyVLA GitHub Repository](https://github.com/your-repo)
+- [TinyVLA Paper](https://arxiv.org/abs/your-paper-id)
+
