@@ -8,3 +8,5 @@ VLM_weights/Llava-Pythia-400M/tokenizer.json
 VLM_weights/Llava-Pythia-400M/trainer_state.json
 VLM_weights/Llava-Pythia-400M/training_args.bin
 VLM_weights/Llava-Pythia-400M/preprocessor_config.json
+datasets/short-MetaWorld/short-MetaWorld/img-only
+datasets/short-MetaWorld/short-MetaWorld/r3m-processed
