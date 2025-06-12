@@ -10,3 +10,18 @@ VLM_weights/Llava-Pythia-400M/training_args.bin
 VLM_weights/Llava-Pythia-400M/preprocessor_config.json
 datasets/short-MetaWorld/short-MetaWorld/img-only
 datasets/short-MetaWorld/short-MetaWorld/r3m-processed
+
+# General rules for large files and data
+checkpoints/
+datasets/
+
+# Ignore common image formats
+*.jpg
+*.jpeg
+*.png
+*.gif
+
+# Ignore generated videos
+*.mp4
+*.avi
+*.mov
