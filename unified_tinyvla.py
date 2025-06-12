@@ -178,16 +178,9 @@ if __name__ == '__main__':
 
         print("\n--- Final Outputs ---")
         print("Chain of Thought:", outputs['chain_of_thought'])
-        if 'actions' in outputs and outputs['actions'] is not None:
+        if 'actions' in outputs:
             print("Final Actions shape:", outputs['actions'].shape)
             print("First action sequence:", outputs['actions'][0])
-            print("✓ Diffusion-based action prediction working!")
-        else:
-            print("⚠ No actions predicted - this might be expected for inference without proper setup")
-            
-        print("\n🎉 TinyVLA inference completed!")
-        print("Your trained VLM + diffusion policy model is loaded and working.")
-        
     except Exception as e:
         print(f"\nAn error occurred during execution: {e}")
         import traceback
