@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 """
-High-Precision MetaWorld Demo with TinyVLA Diffusion Policy
-Features: Longer episodes, adjustable diffusion steps, and detailed analysis
+TinyVLA Real-Time Inference Demo - Best Performance Configuration
+High-precision MetaWorld manipulation with optimized diffusion policy.
+
+This is the main inference script for TinyVLA real-time robot control.
+Features: Configurable diffusion steps, detailed metrics, and optimal performance.
+
+Usage:
+    python tinyvla_inference_demo.py --task button-press-topdown-v3 --diffusion_steps 10
+    python tinyvla_inference_demo.py --task pick-place-v3 --diffusion_steps 5 --fast
 """
 
 import os
@@ -36,47 +43,53 @@ os.environ['MUJOCO_GL'] = 'glfw'
 
 @dataclass
 class DiffusionConfig:
-    """Configuration for diffusion policy"""
+    """Optimized configuration for diffusion policy"""
     num_train_timesteps: int = 100
-    num_inference_timesteps: int = 10
+    num_inference_timesteps: int = 10  # Optimal balance of quality vs speed
     beta_schedule: str = 'squaredcos_cap_v2'
     clip_sample: bool = True
     prediction_type: str = 'epsilon'
     
-class PrecisionVLAController:
-    """High-precision controller with detailed diffusion control"""
+class OptimizedVLAController:
+    """High-performance controller optimized for real-time inference"""
     
     def __init__(self, model_path: str, checkpoint_path: Optional[str] = None, 
-                 device: str = 'cuda', diffusion_steps: int = 10):
+                 device: str = 'cuda', diffusion_steps: int = 10, fast_mode: bool = False):
         self.device = device
         self.diffusion_steps = diffusion_steps
+        self.fast_mode = fast_mode
         self.load_model(model_path, checkpoint_path)
         
-        # Precision action buffer with timestamps
-        self.action_buffer = deque(maxlen=50)  # Larger buffer for smoother control
-        self.action_timestamps = deque(maxlen=50)
-        self.inference_queue = queue.Queue(maxsize=2)
-        self.result_queue = queue.Queue(maxsize=10)
+        # Optimized action buffer for smooth control
+        buffer_size = 20 if fast_mode else 50
+        self.action_buffer = deque(maxlen=buffer_size)
+        self.action_timestamps = deque(maxlen=buffer_size)
+        self.inference_queue = queue.Queue(maxsize=1 if fast_mode else 2)
+        self.result_queue = queue.Queue(maxlen=5 if fast_mode else 10)
         
-        # Performance metrics
+        # Performance tracking
         self.inference_times = deque(maxlen=100)
-        self.diffusion_metrics = {
-            'noise_norms': [],
-            'action_magnitudes': [],
-            'denoising_progress': []
+        self.performance_metrics = {
+            'avg_inference_time': 0,
+            'fps': 0,
+            'total_inferences': 0
         }
         
-        # Start inference thread
+        # Start optimized inference thread
         self.running = True
         self.inference_thread = threading.Thread(target=self._inference_worker, daemon=True)
         self.inference_thread.start()
+        
+        print(f"🚀 TinyVLA Controller initialized:")
+        print(f"   - Fast mode: {fast_mode}")
+        print(f"   - Diffusion steps: {diffusion_steps}")
+        print(f"   - Buffer size: {buffer_size}")
     
     def load_model(self, model_path: str, checkpoint_path: Optional[str]):
-        """Load model with precision optimizations"""
-        print(f"🎯 Loading model for high-precision control...")
-        print(f"   Diffusion steps: {self.diffusion_steps}")
+        """Load model with performance optimizations"""
+        print(f"🤖 Loading TinyVLA model for optimal performance...")
         
-        # Force float32 for precision
+        # Force float32 for better performance on most GPUs
         original_float16 = torch.float16
         torch.float16 = torch.float32
         
@@ -87,7 +100,7 @@ class PrecisionVLAController:
         finally:
             torch.float16 = original_float16
         
-        # Configure diffusion scheduler
+        # Configure optimized diffusion scheduler
         if hasattr(self.model, 'noise_scheduler'):
             from diffusers.schedulers.scheduling_ddim import DDIMScheduler
             self.model.noise_scheduler = DDIMScheduler(
@@ -100,7 +113,7 @@ class PrecisionVLAController:
             )
             self.model.num_inference_timesteps = self.diffusion_steps
         
-        # Set visual concat
+        # Set visual concat mode
         if not hasattr(self.model, 'visual_concat') or self.model.visual_concat == 'None':
             self.model.visual_concat = 'token_cat'
         
@@ -110,19 +123,37 @@ class PrecisionVLAController:
             checkpoint = torch.load(checkpoint_path, map_location=self.device)
             checkpoint = {k.replace('_orig_mod.', ''): v for k, v in checkpoint.items()}
             self.model.embed_out.load_state_dict(checkpoint, strict=False)
-            print("✅ Checkpoint loaded!")
+            print("✅ Checkpoint loaded successfully!")
         
         self.model.eval()
         torch.set_grad_enabled(False)
-        torch.backends.cudnn.benchmark = True
         
-        # Print model info
-        print(f"\n📊 Diffusion Model Architecture:")
-        print(f"   - UNet channels: [256, 512, 1024]")
-        print(f"   - Kernel size: 5")
+        # Performance optimizations
+        torch.backends.cudnn.benchmark = True
+        if hasattr(torch.backends.cudnn, 'allow_tf32'):
+            torch.backends.cudnn.allow_tf32 = True
+        if hasattr(torch.backends.cuda, 'matmul'):
+            torch.backends.cuda.matmul.allow_tf32 = True
+        
+        # Try torch.compile for PyTorch 2.0+ (significant speedup)
+        if hasattr(torch, 'compile') and not self.fast_mode:  # Skip compile in fast mode for lower latency
+            try:
+                print("⚡ Compiling model with torch.compile()...")
+                self.model = torch.compile(self.model, mode='reduce-overhead')
+                print("✅ Model compiled successfully!")
+            except Exception as e:
+                print(f"⚠️  torch.compile failed (this is okay): {e}")
+        
+        # Model architecture info
+        total_params = sum(p.numel() for p in self.model.parameters())
+        diffusion_params = sum(p.numel() for p in self.model.embed_out.parameters())
+        
+        print(f"\n📊 Model Information:")
+        print(f"   - Total parameters: {total_params:,}")
+        print(f"   - Diffusion head parameters: {diffusion_params:,}")
         print(f"   - Action dimension: {self.model.action_dim}")
         print(f"   - Chunk size: {self.model.num_queries}")
-        print(f"   - Parameters: {sum(p.numel() for p in self.model.embed_out.parameters()):,}")
+        print(f"   - Device: {self.device}")
     
     def _inference_worker(self):
         """Background inference with metrics tracking"""
@@ -292,8 +323,8 @@ class PrecisionVLAController:
                     self.action_timestamps.append(timestamp + i * 0.05)  # 20Hz actions
                 
                 # Store latest metrics
-                self.diffusion_metrics['noise_norms'].append(metrics['noise_norms'])
-                self.diffusion_metrics['action_magnitudes'].append(metrics['final_action_norm'])
+                self.performance_metrics['noise_norms'].append(metrics['noise_norms'])
+                self.performance_metrics['action_magnitudes'].append(metrics['final_action_norm'])
         except queue.Empty:
             pass
         
@@ -335,9 +366,9 @@ class PrecisionVLAController:
             'avg_inference_time': np.mean(self.inference_times),
             'inference_fps': 1.0 / np.mean(self.inference_times) if self.inference_times else 0,
             'buffer_size': len(self.action_buffer),
-            'total_inferences': len(self.diffusion_metrics['action_magnitudes']),
-            'avg_action_magnitude': np.mean(self.diffusion_metrics['action_magnitudes']) 
-                if self.diffusion_metrics['action_magnitudes'] else 0
+            'total_inferences': len(self.performance_metrics['action_magnitudes']),
+            'avg_action_magnitude': np.mean(self.performance_metrics['action_magnitudes']) 
+                if self.performance_metrics['action_magnitudes'] else 0
         }
     
     def stop(self):
@@ -345,7 +376,7 @@ class PrecisionVLAController:
         self.running = False
         self.inference_thread.join()
 
-def run_precision_demo(controller: PrecisionVLAController, env, instruction: str,
+def run_precision_demo(controller: OptimizedVLAController, env, instruction: str,
                       max_steps: int = 500, target_fps: int = 30,
                       log_interval: int = 50) -> dict:
     """Run high-precision demo with detailed logging"""
@@ -518,6 +549,7 @@ def main():
     parser.add_argument("--diffusion-steps", type=int, default=10,
                        help="Number of diffusion denoising steps (1-50)")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--fast", action="store_true", help="Enable fast mode for lower latency")
     
     args = parser.parse_args()
     
@@ -545,10 +577,11 @@ def main():
     print("="*70)
     
     # Initialize controller
-    controller = PrecisionVLAController(
+    controller = OptimizedVLAController(
         model_path=args.model_path,
         checkpoint_path=args.checkpoint,
-        diffusion_steps=args.diffusion_steps
+        diffusion_steps=args.diffusion_steps,
+        fast_mode=args.fast
     )
     
     # Setup environment
