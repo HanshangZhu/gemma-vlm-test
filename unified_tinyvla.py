@@ -1,7 +1,8 @@
 # unified_tinyvla.py
 import os
 import sys
-sys.path.append('/home/hz/gemma-vlm-test/TinyVLA')
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'TinyVLA')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'TinyVLA', 'llava-pythia')))
 import torch
 import torch.nn as nn
 from PIL import Image
@@ -22,7 +23,7 @@ class UnifiedTinyVLAModel(nn.Module):
     A wrapper model that uses a pre-trained LlavaPythiaForCausalLM base model.
     This version uses the base model's built-in diffusion head for action prediction.
     """
-    def __init__(self, model_path: str, mode: str = "text"):
+    def __init__(self, model_path: str, mode: str = "text", tune_vlm: bool = False):
         super().__init__()
         self.mode = mode
         
@@ -43,10 +44,11 @@ class UnifiedTinyVLAModel(nn.Module):
             trust_remote_code=True
         )
         
-        # Freeze base model parameters except for the action head
-        for name, param in self.base_model.named_parameters():
-            if 'embed_out' not in name:  # Only train the action head
-                param.requires_grad = False
+        # Freeze base model parameters except for the action head unless tuning VLM
+        if not tune_vlm:
+            for name, param in self.base_model.named_parameters():
+                if 'embed_out' not in name:  # Only train the action head
+                    param.requires_grad = False
             
         # This wrapper uses its own text decoder
         self.text_decoder = nn.Sequential(
@@ -56,7 +58,7 @@ class UnifiedTinyVLAModel(nn.Module):
             nn.Linear(512, self.base_model.config.vocab_size)
         )
     
-    def forward(self, input_ids, attention_mask, images, states=None, actions=None, is_pad=None):
+    def forward(self, input_ids, attention_mask, images, states=None, actions=None, is_pad=None, eval=False):
         B = images.shape[0]  # Get actual batch size from images
         
         # Create dummy is_pad if not provided but actions are provided (training mode)
@@ -72,9 +74,18 @@ class UnifiedTinyVLAModel(nn.Module):
             states=states,
             actions=actions,  # Pass actions to base model for training
             is_pad=is_pad,    # Pass is_pad for training
+            eval=eval,        # Pass eval flag for inference mode
             return_dict=True,
             use_cache=False   # Disable KV cache when using gradient checkpointing
         )
+        
+        # In eval mode, the model directly returns action tensors
+        if eval and isinstance(outputs, torch.Tensor):
+            return {
+                'text_logits': None,
+                'actions': outputs,
+                'loss': None
+            }
         
         # Extract loss and actions from the outputs
         loss = None
@@ -97,6 +108,53 @@ class UnifiedTinyVLAModel(nn.Module):
             'actions': pred_actions,
             'loss': loss
         }
+
+def tune_vlm(model, train_loader, optimizer, device, num_epochs=1):
+    """
+    Function to fine-tune the VLM model.
+    """
+    model.train()
+    tokenizer = AutoTokenizer.from_pretrained(model.base_model.config._name_or_path)
+    
+    for epoch in range(num_epochs):
+        for batch in train_loader:
+            images = batch['images'].to(device)
+            prompts = batch['prompts']
+            gt_texts = batch['gt_texts']
+            
+            # Tokenize prompts and ground truth texts
+            prompt_tokens = tokenizer(prompts, return_tensors="pt", padding=True, truncation=True).to(device)
+            gt_tokens = tokenizer(gt_texts, return_tensors="pt", padding=True, truncation=True).to(device)
+
+            optimizer.zero_grad()
+            
+            outputs = model(
+                input_ids=prompt_tokens.input_ids,
+                attention_mask=prompt_tokens.attention_mask,
+                images=images
+            )
+            
+            logits = outputs['text_logits']
+            loss = outputs['loss']
+
+            # Reshape logits and labels for loss calculation if loss is not pre-calculated
+            if loss is None and logits is not None:
+                loss_fct = nn.CrossEntropyLoss()
+                
+                # Align sequence lengths for loss calculation
+                seq_len = logits.size(1)
+                gt_ids = gt_tokens.input_ids[:, :seq_len].contiguous()
+
+                logits_flat = logits.view(-1, logits.size(-1))
+                labels_flat = gt_ids.view(-1).to(logits.device)
+                loss = loss_fct(logits_flat, labels_flat)
+
+            if loss is not None:
+                loss.backward()
+                optimizer.step()
+                print(f"Epoch: {epoch}, Loss: {loss.item()}")
+            else:
+                print(f"Epoch: {epoch}, No loss to optimize.")
 
 def run_inference(image_path, prompt, model_path, mode="vlm"):
     model = UnifiedTinyVLAModel(model_path, mode=mode)
