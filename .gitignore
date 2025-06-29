@@ -25,3 +25,8 @@ datasets/
 *.mp4
 *.avi
 *.mov
+
+# Python cache and logs
+__pycache__/
+*.log
+*.TXT

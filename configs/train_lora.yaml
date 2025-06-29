@@ -1,0 +1,40 @@
+# VLA LoRA Training Configuration
+
+# --- Core Model & LoRA Parameters ---
+model_path: "VLM_weights/Llava-Pythia-400M"
+lora_r: 4  # Reduced from 8 for better stability
+lora_alpha: 8  # Reduced proportionally
+lora_dropout: 0.05
+
+# --- Training Loop Parameters ---
+batch_size: 1
+gradient_accumulation_steps: 4  # Reduced back to original value
+learning_rate: 1e-5
+diffusion_learning_rate: 1e-5
+max_steps: 20000  # Approximately 50 epochs for a dataset of ~1500 samples
+save_steps: 1000
+output_dir: "./VLM_weights/lora_adapter"
+
+# --- Dataset Parameters ---
+data_root: "datasets/short-MetaWorld/short-MetaWorld/r3m-processed/r3m_MT10_20"
+train_tasks: "pick-place-v2,door-open-v2,drawer-close-v2"
+
+# --- Memory & Performance Optimization ---
+use_bf16: false  # Keep float32 for numerical stability
+use_gradient_checkpointing: false  # Disable temporarily for debugging
+freeze_vision_encoder: true  # Keep frozen to save memory
+train_diffusion_head: true  # Enable diffusion head training for VLA models
+cpu_offload: false  # Disable CPU offloading temporarily  
+max_memory_cleanup_steps: 5  # More frequent cleanup
+chunk_size: 16  # Reduced chunk size
+image_size: 224  # Reduced image size from 336 to 224 to save memory
+
+# --- Advanced Dataloader Options ---
+dataloader_num_workers: 1  # Reduced workers to save memory
+pin_memory: false  # Disable pin_memory to reduce memory usage
+persistent_workers: false  # Disable persistent workers
+
+# --- Stability & NaN Prevention ---
+gradient_clip_norm: 1.0
+warmup_steps: 100
+weight_decay: 0.0 
