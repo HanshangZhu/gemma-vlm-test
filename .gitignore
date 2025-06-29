@@ -139,7 +139,6 @@ training_scripts/
 
 # Documentation (keep only main README)
 docs/
-Intro/
 
 # Test files
 test_*/
