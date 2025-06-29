@@ -1,3 +1,173 @@
+# ==============================================================================
+# TinyVLA Project .gitignore - Comprehensive file exclusions
+# ==============================================================================
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+*.pyc
+*.pyo
+*.pyd
+.env
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.pytest_cache/
+htmlcov/
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# PyTorch
+*.pth
+*.pt
+*.bin
+
+# ==============================================================================
+# LARGE FILES - Exclude from Git due to size limits
+# ==============================================================================
+
+# Model weights and checkpoints (>100MB GitHub limit)
+VLM_weights/
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.model
+
+# Training state files (very large)
+*/training_state.pt
+training_state.pt
+
+# Datasets (multi-GB files)
+*.h5
+*.hdf5
+metaworld_dataset.h5
+metaworld_dataset.*
+datasets/*.h5
+datasets/*.hdf5
+
+# Checkpoint directories
+checkpoints/
+publication_checkpoints/
+model_checkpoints/
+*/step_*/
+step_*/
+
+# ==============================================================================
+# LOGS AND TEMPORARY FILES
+# ==============================================================================
+
+# Logs
+logs/
+*.log
+*.logs
+events.out.tfevents.*
+wandb/
+tensorboard/
+runs/
+
+# Temporary files
+tmp/
+temp/
+.tmp/
+*.tmp
+*.temp
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# ==============================================================================
+# PROJECT-SPECIFIC EXCLUSIONS
+# ==============================================================================
+
+# MetaWorld specific
+metaworld_v1/
+mujoco_log.txt
+MUJOCO_LOG.TXT
+
+# Evaluation results (can be large)
+evaluation_results/*.json
+evaluation_results/*.pkl
+publication_results/
+
+# Analysis and debug outputs
+analysis/
+debug_*/
+inference_scripts/
+training_scripts/
+
+# Documentation (keep only main README)
+docs/
+Intro/
+
+# Test files
+test_*/
+*_test.py
+testing/
+
+# ==============================================================================
+# KEEP THESE IMPORTANT FILES (explicit inclusions)
+# ==============================================================================
+
+# Core scripts (always include)
+!tinyvla_loader.py
+!minimal_pickplace_demo.py  
+!fast_tinyvla_demo.py
+!train_lora.py
+!README.md
+!requirements_lora_vla.txt
+
+# Small config and stats files
+!configs/
+!metaworld_stats.pkl
+
+# Small text files
+!*.md
+!*.txt
+!*.yaml
+!*.yml
+
 voicechat_smolvlm_2.py
 VLM_weights/Llava-Pythia-400M/config.json
 VLM_weights/Llava-Pythia-400M/generation_config.json
