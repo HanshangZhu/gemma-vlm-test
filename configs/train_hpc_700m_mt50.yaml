@@ -1,0 +1,54 @@
+# === TinyVLA LoRA training on full MT50 (HPC) =============================
+# Name: train_hpc_700m_mt50.yaml
+# Purpose: run on 2×40 GB A100 (or larger) using BF16, frozen vision tower.
+# -------------------------------------------------------------------------
+# Model / paths
+model_path: lesjie/Llava-Pythia-700M   # 700 M backbone; auto-download once
+output_dir: outputs/mt50_hpc_run       # will get timestamp suffix if exists
+
+# Dataset -----------------------------------------------------------------
+dataset_variant: mt50                  # full HuggingFace MT50 dataset
+prompt_json_path: datasets/mt50_task_prompts.json
+prompt_style: mixed                    # enables 40/30/30 simple/detailed/very
+validate_samples_count: 0              # skip per-sample validation for speed
+
+# LoRA hyper-params --------------------------------------------------------
+lora_r: 8
+lora_alpha: 16
+lora_dropout: 0.05
+
+# Training schedule --------------------------------------------------------
+batch_size: 8                     # PER GPU (fits 40 GB with BF16)
+gradient_accumulation_steps: 2    # → effective batch 32
+learning_rate: 1.0e-6
+diffusion_learning_rate: 5.0e-7
+max_steps: 160000                 # ≈ 3 epochs over 430 k frames @ eff-BS 32
+save_steps: 10000                 # save every ~45 min
+
+# Diffusion head -----------------------------------------------------------
+train_diffusion_head: true
+diffusion_warmup_steps: 0
+
+diffusion_head_save_dir: outputs/mt50_hpc_run/diff_head
+
+# Memory / precision -------------------------------------------------------
+use_bf16: true
+use_gradient_checkpointing: true
+freeze_vision_encoder: true        # keep CLIP frozen to save memory
+cpu_offload: false
+max_memory_cleanup_steps: 500       # empty CUDA cache every 500 steps
+chunk_size: 8
+image_size: 336                     # 336×336 CLIP input
+
+# Dataloader ---------------------------------------------------------------
+dataloader_num_workers: 4
+pin_memory: true
+persistent_workers: true
+
+# Optimisation & stability -------------------------------------------------
+weight_decay: 0.01
+gradient_clip_norm: 0.3
+warmup_steps: 2000                  # 2 k-step LR warm-up (~15 min)
+
+# Misc ---------------------------------------------------------------------
+max_memory_cleanup_steps: 500 
