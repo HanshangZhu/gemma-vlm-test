@@ -21,12 +21,12 @@ TinyVLA is a **Vision-Language-Action** model that combines:
 ## ✨ Key Features
 
 - 🚀 **Fully Functional**: Complete training and inference pipeline
-- 🎮 **Live Demos**: Real-time visualization with RGB windows
-- ⚡ **Optimized Performance**: 5+ FPS visual demo, 500+ FPS benchmark
-- 🧠 **Smart Fallbacks**: Heuristic actions when model fails
-- 📊 **Comprehensive Metrics**: Detailed performance analysis
+- 🎮 **Live Demos**: Real-time MetaWorld visualization with 100% working demos
+- ⚡ **Optimized Performance**: Fixed rendering issues, stable execution
+- 🧠 **Smart Model Loading**: Comprehensive LoRA + diffusion head integration
+- 📊 **Comprehensive Testing**: Multiple debug and validation scripts
 - 🔧 **Beginner-Friendly**: Extensive comments explaining every line
-- 🎯 **Ready to Use**: Pre-trained model and simple API
+- 🎯 **Ready to Use**: Pre-configured training and inference pipeline
 
 ## 🚀 Quick Start
 
@@ -51,27 +51,27 @@ pip install -r requirements_lora_vla.txt
 # Test TinyVLA model loader
 python tinyvla_loader.py
 
-# Run optimized demo with GUI
-python minimal_pickplace_demo.py
+# Run MetaWorld demo (WORKING!)
+python metaworld_pickplace_demo.py --episodes 2 --max-steps 50
 
-# Run ultra-fast benchmark
-python fast_tinyvla_demo.py
+# Test model loading
+python test_model_loading.py
 ```
 
-### 3. Expected Output
+### 3. Expected Output ✅
 
-✅ **Working Demo Output:**
+**Working Demo Output:**
 ```
-🤖 SimpleTinyVLA Initializing...
-   Device: cuda
-📊 Loading stats from metaworld_stats.pkl
-🧠 Loading VLA model...
-✅ SimpleTinyVLA ready!
-🖼️ RGB window opened (480x360 for faster rendering)
-🚀 Starting optimized demo...
-💨 Optimizations: 5x frame skip, smaller window, no delays
-[VLA] Step  25: reward= 0.000, total= 0.094, success=False
-🚀 Performance: 5.1 FPS (97.2s total)
+🤖 MetaWorld Pick-Place Demo Starting...
+✅ MetaWorld imported successfully
+✅ TinyVLA loader available
+🌍 Setting up MetaWorld pick-place-v2 environment...
+✅ Environment instantiated: <class 'metaworld.envs.mujoco.sawyer_xyz.v2.sawyer_pick_place_v2.SawyerPickPlaceEnvV2'>
+✅ MetaWorld offscreen render successful: shape (480, 640, 3)
+🎬 Episode 1 starting...
+🤖 Model actions: 45/50 (90.0% model-driven actions)
+📊 Episode 1 results: Steps: 50, Success: False, Model actions: 45
+🎉 Demo completed!
 ```
 
 ## 📁 Project Structure
@@ -79,36 +79,37 @@ python fast_tinyvla_demo.py
 ```
 vla-vlm-test/
 ├── 🧠 Core Model Files
-│   ├── tinyvla_loader.py          # Simple model loading API
-│   ├── train_lora.py              # Training script
-│   └── metaworld_stats.pkl        # Normalization statistics
+│   ├── tinyvla_loader.py          # 🌟 Simple model loading API (32KB)
+│   ├── train_lora.py              # 🏋️ LoRA training script (55KB)
+│   └── metaworld_stats.pkl        # 📊 Normalization statistics
 │
-├── 🎮 Demo Scripts  
-│   ├── minimal_pickplace_demo.py  # Optimized visual demo (5+ FPS)
-│   ├── fast_tinyvla_demo.py       # Ultra-fast benchmark (500+ FPS) 
-│   └── live_vla_demo.py           # Alternative demo version
+├── 🎮 Demo & Testing Scripts  
+│   ├── metaworld_pickplace_demo.py # ✅ WORKING MetaWorld demo (17KB)
+│   ├── benchmark_vla.py           # 📈 Performance benchmarking (9.8KB)
+│   ├── test_model_loading.py      # 🧪 Model loading tests (3.6KB)
+│   ├── debug_prediction.py        # 🔍 Prediction debugging (7.7KB)
+│   └── check_weights.py           # ⚖️ Weight compatibility checker (12KB)
 │
-├── 📊 Evaluation & Testing
-│   ├── benchmark_vla.py           # Model benchmarking
-│   ├── online_evaluator.py        # Performance evaluation  
-│   └── tinyvla_test.py            # Model testing
-│
-├── ⚙️ Model Weights & Config
-│   ├── VLM_weights/               # Trained model weights
-│   │   ├── Llava-Pythia-400M/     # Base model (72.8M params)
-│   │   └── lora_adapter/          # LoRA fine-tuned weights
-│   ├── configs/                   # Training configurations
-│   └── TinyVLA/                   # Model architecture code
+├── ⚙️ Model Weights & Training
+│   ├── VLA_weights/               # 🏗️ Model weights and checkpoints
+│   │   ├── Llava-Pythia-400M/     # 📦 Base model (72.8M params)
+│   │   ├── full_training_bs1_final/ # 🎯 Trained LoRA adapters
+│   │   └── diff_head/             # 🔄 Diffusion head weights
+│   ├── configs/                   # ⚙️ Training configurations
+│   │   ├── train_bs1_final.yaml   # 🎯 Main training config
+│   │   └── train_lora.yaml        # 📝 Alternative config
+│   └── TinyVLA/                   # 🏗️ Model architecture code
 │
 ├── 📚 Documentation & Setup
-│   ├── README.md                  # This file
-│   ├── requirements_lora_vla.txt  # Python dependencies
-│   └── .gitignore                 # Git ignore rules
+│   ├── README.md                  # 📖 This file
+│   ├── TRAINING_COMMANDS.md       # 🚀 Training workflows (2.1KB)
+│   ├── requirements_lora_vla.txt  # 📦 Python dependencies
+│   └── .gitignore                 # 🚫 Git ignore rules
 │
 └── 💾 Data & Logs
-    ├── metaworld_dataset.h5       # Training dataset (5.2GB)
-    ├── logs/                      # Training logs
-    └── evaluation_results/        # Evaluation outputs
+    ├── datasets/                  # 📊 Training datasets (excluded from git)
+    ├── logs/                      # 📋 Training logs
+    └── evaluation_results/        # 📈 Evaluation outputs
 ```
 
 ## 🎮 Usage Examples
@@ -120,7 +121,9 @@ from PIL import Image
 import numpy as np
 
 # Load the model (one line!)
-vla = load_tinyvla()
+vla = load_tinyvla(
+    lora_checkpoint_path="VLA_weights/full_training_bs1_final/step_500"
+)
 
 # Predict an action
 image = Image.open("robot_view.jpg")
@@ -129,206 +132,224 @@ action = vla.predict_action(image, robot_state, "pick up the red block")
 print(f"Predicted action: {action}")  # [x, y, z, gripper]
 ```
 
-### Visual Demo with Performance Metrics
-```python
-# Run optimized demo with real-time visualization
-python minimal_pickplace_demo.py
+### MetaWorld Demo (Working!)
+```bash
+# Run interactive MetaWorld demo
+python metaworld_pickplace_demo.py --episodes 3 --max-steps 100
 
-# Expected performance: 5+ FPS with RGB window
-# Features: Frame skipping, optimized rendering, performance tracking
+# Expected: No crashes, visual feedback, model predictions
+# ✅ FIXED: render_mode parameter issue resolved
+# ✅ FIXED: MetaWorld v2 rendering with offscreen=True
 ```
 
-### Speed Benchmarking
-```python
-# Ultra-fast benchmark without GUI
-python fast_tinyvla_demo.py
+### Training Your Own Model
+```bash
+# Quick test training (50 steps)
+python train_lora.py --config configs/train_bs1_final.yaml
 
-# Expected performance: 500+ FPS
-# Perfect for: Model speed testing, environment benchmarking
+# Full training (20,000 steps)
+# Edit max_steps in config file, then:
+python train_lora.py --config configs/train_bs1_final.yaml
 ```
 
 ## 🧠 Model Architecture
 
 ### Base Model: Llava-Pythia-400M
 - **Parameters**: 72.8 million (lightweight!)
-- **Vision**: CLIP image encoder
+- **Vision**: CLIP image encoder (336x336 input)
 - **Language**: Pythia-400M language model  
 - **Training**: Pre-trained on vision-language tasks
 
-### Action Head: Droid Diffusion
+### Action Head: Diffusion Policy
 - **Method**: Diffusion-based action prediction
-- **Input**: 9D robot state + vision + language
-- **Output**: 10D action predictions
-- **Chunk Size**: 20 future actions
+- **Input**: 7D robot state + vision + language
+- **Output**: 4D action predictions [x, y, z, gripper]
+- **Chunk Size**: 16 future actions
 
 ### LoRA Fine-tuning
 - **Method**: Low-Rank Adaptation (efficient fine-tuning)
 - **Rank**: 4, Alpha: 8, Dropout: 0.05
-- **Training**: 20,000 steps, final loss: 0.2362
+- **Training**: Supports 20,000+ steps
 - **Tasks**: pick-place-v2, door-open-v2, drawer-close-v2
 
 ## 🏋️ Training Details
 
 ### Dataset
 - **Source**: MetaWorld robotic manipulation tasks
-- **Size**: 5.2GB HDF5 dataset
+- **Format**: HDF5 trajectories with multi-camera images
 - **Tasks**: Pick-place, door opening, drawer manipulation
 - **Episodes**: Thousands of robot trajectories
 
 ### Training Configuration
 ```yaml
-# Optimized for 6GB GPU
+# Optimized for 6GB GPU (configs/train_bs1_final.yaml)
 batch_size: 1
 gradient_accumulation_steps: 8
 learning_rate: 1e-4
-precision: float32  # Stable training
-image_size: 224x224  # Memory efficient
-cpu_offload: true   # Handle large model
+diffusion_learning_rate: 1e-4
+image_size: 336  # Model native size
+chunk_size: 16   # Action prediction horizon
+use_bf16: false  # Stable float32 training
 ```
 
 ### Training Results
 ```
-✅ Training completed successfully!
-📊 Final metrics:
-   - Steps: 20,000
-   - Final loss: 0.2362
-   - Training time: ~8 hours on RTX 3060
-   - Memory usage: ~5.8GB GPU
+✅ Training system functional and tested!
+📊 Key features:
+   - LoRA adapter training: ✅ Working
+   - Diffusion head training: ✅ Working  
+   - Memory optimizations: ✅ Applied
+   - NaN prevention: ✅ Multiple fixes
+   - Checkpoint saving: ✅ Automated
 ```
 
-## ⚡ Performance Optimizations
+## ⚡ Performance & Fixes
 
-### 1. Rendering Optimizations
-- **Frame Skipping**: Update display every 5 frames (5x speedup)
-- **Smaller Windows**: 480x360 instead of 640x480 (faster processing)
-- **Faster Resizing**: NEAREST interpolation instead of BILINEAR
-- **Non-blocking Updates**: `update_idletasks()` instead of `update()`
+### 🔧 Critical Fixes Applied
 
-### 2. Model Optimizations  
-- **Conditional Rendering**: Only render when model needs input
-- **Heuristic Fallbacks**: Fast rule-based actions when model fails
-- **Batch Processing**: Efficient tensor operations
-- **Memory Management**: Proper cleanup and GPU/CPU balance
+**1. MetaWorld Integration (FIXED ✅)**
+```python
+# Before: Crashed with render_mode parameter
+env = env_cls(render_mode='rgb_array')  # ❌ TypeError
 
-### 3. Speed Comparison
-| Mode | FPS | Description |
-|------|-----|-------------|
-| **Original** | ~2 | Heavy rendering, large window |
-| **Optimized** | 5.1 | Frame skip, smaller window |
-| **Ultra-Fast** | 516+ | Minimal rendering, no GUI |
+# After: Clean environment creation
+env = env_cls()  # ✅ Works perfectly
+```
+
+**2. Visual Rendering (FIXED ✅)**
+```python
+# Before: All rendering methods failed
+rgb_frame = env.render(mode='rgb_array')  # ❌ None
+
+# After: Correct MetaWorld v2 API
+rgb_frame = env.render(offscreen=True)    # ✅ (480, 640, 3)
+```
+
+**3. Model Loading (ENHANCED ✅)**
+- ✅ **LoRA Adapters**: Properly loads fine-tuned weights
+- ✅ **Diffusion Head**: Handles 72.8M action prediction parameters
+- ✅ **Error Handling**: Graceful fallbacks and detailed error messages
+- ✅ **Memory Management**: Optimized for 6GB GPU training
+
+### 📊 Current Performance
+| Component | Status | Performance |
+|-----------|--------|-------------|
+| **Model Loading** | ✅ Working | <10s startup |
+| **MetaWorld Demo** | ✅ Working | No crashes |
+| **Training Pipeline** | ✅ Working | 6GB GPU compatible |
+| **Action Prediction** | ✅ Working | Real-time inference |
+| **Visual Feedback** | ✅ Working | RGB rendering |
 
 ## 🔧 Troubleshooting
 
 ### Common Issues & Solutions
 
-#### 1. CUDA Out of Memory
+#### 1. MetaWorld Demo Crashes
 ```bash
-# Solution: Reduce batch size or use CPU offloading
-# Edit configs/train_lora.yaml:
-batch_size: 1
-cpu_offload: true
+# This is FIXED! The demo now works reliably
+# If you still see issues, make sure you have the latest code:
+git pull origin main
+python metaworld_pickplace_demo.py --episodes 1 --max-steps 10
 ```
 
 #### 2. Model Loading Fails
 ```bash
-# Check if model files exist
-ls VLM_weights/Llava-Pythia-400M/
-ls VLM_weights/lora_adapter/
+# Check if training checkpoints exist
+ls VLA_weights/full_training_bs1_final/
 
+# If missing, run a quick training:
+python train_lora.py --config configs/train_bs1_final.yaml
+```
+
+#### 3. Import Errors
+```bash
 # Verify conda environment
 conda activate tinyvla
-python -c "import torch; print(torch.cuda.is_available())"
-```
+python -c "import torch; import metaworld; print('✅ All imports work')"
 
-#### 3. Dimension Mismatch Errors
-```bash
-# This is fixed! The model now properly resizes embeddings
-# If you see this error, make sure you're using the latest tinyvla_loader.py
-```
-
-#### 4. Slow Performance
-```bash
-# Use optimized demos
-python minimal_pickplace_demo.py  # 5+ FPS visual
-python fast_tinyvla_demo.py       # 500+ FPS benchmark
-
-# Check GPU usage
-nvidia-smi
-```
-
-### Environment Issues
-```bash
-# Complete environment reset
-conda deactivate
-conda remove -n tinyvla --all
-conda create -n tinyvla python=3.10
-conda activate tinyvla
+# If missing packages:
 pip install -r requirements_lora_vla.txt
 ```
 
-## 📊 Evaluation Results
+#### 4. CUDA Out of Memory
+```bash
+# Training config is optimized for 6GB GPU
+# If still issues, reduce batch size in config:
+batch_size: 1
+gradient_accumulation_steps: 4
+```
 
-### Model Performance
-- ✅ **Training**: Successfully completed 20K steps
-- ✅ **Inference**: Dimension mismatch issues resolved
-- ✅ **Integration**: Works with MetaWorld simulation
-- ✅ **Fallbacks**: Graceful degradation to heuristics
+## 📊 Validation Results
 
-### Speed Benchmarks
-- 🚀 **Visual Demo**: 5.1 FPS (optimized)
-- ⚡ **Benchmark**: 516.3 FPS (ultra-fast)
-- 🎯 **Model Loading**: <10 seconds
-- 💾 **Memory Usage**: ~2GB GPU inference
+### ✅ Working Components
+- **🤖 Model Architecture**: LLaVA-Pythia + Diffusion Policy
+- **🎯 Training Pipeline**: LoRA fine-tuning with memory optimizations
+- **🎮 MetaWorld Integration**: Pick-place-v2 environment 
+- **🖼️ Visual Processing**: CLIP image encoder + PIL image handling
+- **🔄 Action Prediction**: 4D continuous action space
+- **📊 Normalization**: Automatic state/action scaling
 
-### Task Success
-- 🎯 **Pick-Place**: Model predicts reasonable actions
-- 🔄 **Continuous**: Runs indefinitely without crashes
-- 🎨 **Visual**: Real-time RGB feedback
-- 📈 **Metrics**: Comprehensive performance tracking
+### 🧪 Test Results
+```bash
+# All these commands work without errors:
+python test_model_loading.py     # ✅ Model loads successfully
+python debug_prediction.py      # ✅ Predictions work
+python check_weights.py         # ✅ Weights compatible
+python metaworld_pickplace_demo.py  # ✅ Demo runs completely
+```
 
 ## 🛠️ Development Guide
 
+### Training Your Model
+```bash
+# 1. Prepare environment
+conda activate tinyvla
+
+# 2. Check dataset (or generate normalization stats)
+python calculate_metaworld_stats.py  # Creates metaworld_stats.pkl
+
+# 3. Start training
+python train_lora.py --config configs/train_bs1_final.yaml
+
+# 4. Monitor progress
+tail -f logs/training.log
+
+# 5. Test trained model
+python test_model_loading.py
+```
+
 ### Adding New Tasks
-1. **Data Collection**: Record task demonstrations
-2. **Dataset Integration**: Add to HDF5 dataset
-3. **Training Config**: Update task list in config
-4. **Evaluation**: Test on new task
+1. **Data**: Add task trajectories to dataset
+2. **Config**: Update `train_tasks` in config file
+3. **Stats**: Regenerate normalization statistics
+4. **Train**: Run training with new task list
+5. **Test**: Validate on new task
 
-### Model Improvements
-1. **Architecture**: Modify action head or vision encoder
-2. **Training**: Adjust hyperparameters or loss functions
-3. **Optimization**: Add new speed optimizations
-4. **Evaluation**: Comprehensive benchmarking
-
-### Code Structure
+### Code Architecture
 ```python
-# Core model loading and inference
-tinyvla_loader.py      # 🧠 Simple API for model usage
-
-# Demo applications  
-minimal_pickplace_demo.py  # 🎮 Optimized visual demo
-fast_tinyvla_demo.py       # ⚡ Speed benchmark
-
-# Training and evaluation
-train_lora.py             # 🏋️ Model training
-benchmark_vla.py          # 📊 Performance evaluation
+# Clean separation of concerns:
+tinyvla_loader.py          # 🧠 Model interface
+train_lora.py             # 🏋️ Training logic  
+metaworld_pickplace_demo.py # 🎮 Demo application
+TinyVLA/                  # 🏗️ Core architecture
+configs/                  # ⚙️ Hyperparameters
 ```
 
 ## 🤝 Contributing
 
-We welcome contributions! Here's how to get started:
+We welcome contributions! The codebase is designed to be:
 
+- 📝 **Beginner-Friendly**: Extensive comments and documentation
+- 🧪 **Well-Tested**: Multiple validation scripts
+- 🔧 **Modular**: Clear separation between components
+- 📊 **Measurable**: Comprehensive benchmarking
+
+### Development Workflow
 1. **Fork** the repository
-2. **Create** a feature branch: `git checkout -b feature-name`
-3. **Make** your changes with comprehensive comments
-4. **Test** thoroughly: `python tinyvla_loader.py`
-5. **Submit** a pull request
-
-### Code Style
-- 📝 **Comments**: Explain every line for beginners
-- 🎯 **Functions**: Clear docstrings with examples
-- 🧪 **Testing**: Include test cases
-- 📊 **Performance**: Measure and report improvements
+2. **Create** feature branch: `git checkout -b feature-name`
+3. **Test** changes: `python test_model_loading.py`
+4. **Document** thoroughly with comments
+5. **Submit** pull request with test results
 
 ## 📜 License
 
@@ -337,10 +358,11 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 🙏 Acknowledgments
 
 - **MetaWorld**: Simulation environment for robotic tasks
-- **LLaVA**: Vision-language architecture inspiration  
-- **Pythia**: Language model foundation
-- **LoRA**: Efficient fine-tuning methodology
+- **LLaVA**: Vision-language architecture foundation  
+- **Pythia**: Language model backbone
+- **LoRA/PEFT**: Efficient fine-tuning methodology
 - **CLIP**: Vision encoder for image understanding
+- **Diffusion Policy**: Action prediction framework
 
 ## 📞 Support
 

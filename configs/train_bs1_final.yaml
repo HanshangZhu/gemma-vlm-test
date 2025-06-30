@@ -1,0 +1,39 @@
+# FINAL Working Config - batch_size=1 with original image size but maximum memory optimization
+model_path: VLA_weights/Llava-Pythia-400M
+output_dir: VLA_weights/full_training_bs1_final
+diffusion_head_save_dir: VLA_weights/diff_head  # New parameter for diffusion head save directory
+data_root: datasets/short-MetaWorld/short-MetaWorld/r3m-processed/r3m_MT10_20
+train_tasks: pick-place-v2
+
+# LoRA settings (minimal to save memory)
+lora_r: 2                         # 🔥 Reduced from 4 to save memory
+lora_alpha: 4                     # 🔥 Reduced proportionally
+lora_dropout: 0.1
+
+# Training parameters - MAXIMUM MEMORY OPTIMIZATION
+batch_size: 1                     # Keep batch_size=1 as requested
+gradient_accumulation_steps: 2    # 🔥 Minimal accumulation to save memory
+learning_rate: 1e-6               # Conservative LR for full training
+diffusion_learning_rate: 5e-7     # Even lower LR for 72.8M diffusion head
+max_steps: 1000                   # Reduced for testing
+save_steps: 1000                   # Very frequent saves to avoid memory buildup
+train_diffusion_head: true       # 🔥 CRITICAL: Train the diffusion head
+
+# 🔥 MAXIMUM MEMORY OPTIMIZATION
+use_bf16: false                   # Keep FP32 for stability
+use_gradient_checkpointing: true  # 🔥 ENABLE to save memory
+freeze_vision_encoder: false       # Keep frozen to save memory
+cpu_offload: false
+max_memory_cleanup_steps: 1       # 🔥 Cleanup EVERY step
+chunk_size: 4                     # 🔥 Minimal chunk size
+image_size: 336                   # 🔥 Keep original size to avoid resize issues
+
+# Dataloader settings - MAXIMUM MEMORY OPTIMIZATION
+dataloader_num_workers: 0         # 🔥 No multiprocessing to save memory
+pin_memory: false                 # Don't pin memory
+persistent_workers: false
+
+# Stability settings for batch_size=1
+gradient_clip_norm: 0.3           
+warmup_steps: 50                  # Minimal warmup
+weight_decay: 0.01 

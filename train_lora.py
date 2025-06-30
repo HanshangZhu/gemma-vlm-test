@@ -50,6 +50,7 @@ if os.path.isdir(nested_llava_pkg) and nested_llava_pkg not in sys.path:
 
 # Add the project root to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+#this is where this script exists
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../TinyVLA')))
 
 # Add project root to path for local imports
@@ -61,6 +62,7 @@ if llava_pythia_path not in sys.path:
 
 # Also add the nested package directory if present (TinyVLA/llava_pythia/llava_pythia)
 nested_llava_pythia = os.path.join(llava_pythia_path, "llava_pythia")
+#os.join() is used to join two paths together, means that if the path is not in the path, it will be added to the path
 if nested_llava_pythia not in sys.path and os.path.isdir(nested_llava_pythia):
     sys.path.insert(0, nested_llava_pythia)
 
@@ -85,9 +87,13 @@ def apply_dimension_fixes():
         
         def patched_forward(self, sample, timestep, global_cond=None, states=None):
             """Patched forward method that properly handles dimension mismatches"""
+            #sample is the image, timestep is the timestep, global_cond is the global conditioning, states is the states
+            #the global conditioning of the image is what is passed to the unet, so the image-text pair embedding;
             try:
                 # move axis for processing
                 sample = sample.moveaxis(-1, -2)
+                #here we are moving the axis of the image to the last dimension, so that the image is in the shape of [batch_size, channels, height, width]
+                
                 
                 # process global conditioning with proper error handling
                 if global_cond is not None:
@@ -185,6 +191,7 @@ class TrainingConfig:
     max_steps: int
     save_steps: int
     output_dir: str
+    diffusion_head_save_dir: str  # New parameter for diffusion head save directory
     data_root: str
     train_tasks: str
     
@@ -222,8 +229,18 @@ class MetaWorldDataset(torch.utils.data.Dataset):
     def _load_trajectories(self):
         all_trajectories = []
         
-        dataset_root = os.path.dirname(self.config.data_root)
-        img_root = os.path.join(os.path.dirname(dataset_root), "img_only")
+        # Fix path construction to find the img_only directory
+        # data_root: datasets/short-MetaWorld/short-MetaWorld/r3m-processed/r3m_MT10_20
+        # img_root should be: datasets/short-MetaWorld/short-MetaWorld/img_only
+        dataset_root = os.path.dirname(self.config.data_root)  # r3m-processed
+        parent_dir = os.path.dirname(dataset_root)             # short-MetaWorld
+        img_root = os.path.join(parent_dir, "img_only")
+
+        print(f"🔍 Debug paths:")
+        print(f"  data_root: {self.config.data_root}")
+        print(f"  dataset_root: {dataset_root}")
+        print(f"  img_root: {img_root}")
+        print(f"  img_root exists: {os.path.exists(img_root)}")
 
         for task in self.tasks:
             pkl_path = os.path.join(self.config.data_root, f"{task}.pkl")
@@ -234,11 +251,13 @@ class MetaWorldDataset(torch.utils.data.Dataset):
                 data = pickle.load(f)
 
             task_img_dir = os.path.join(img_root, task)
+            print(f"🔍 Looking for task images at: {task_img_dir}")
             if not os.path.exists(task_img_dir):
                 print(f"Warning: {task_img_dir} not found for task {task}")
                 continue
 
             traj_dirs = sorted(glob.glob(f"{task_img_dir}/*"), key=lambda x: int(os.path.basename(x)))
+            print(f"🔍 Found {len(traj_dirs)} trajectory directories for {task}")
             for traj_idx, tdir in enumerate(traj_dirs):
                 if traj_idx >= len(data['actions']):
                     continue
@@ -246,16 +265,28 @@ class MetaWorldDataset(torch.utils.data.Dataset):
                 img_paths = sorted(glob.glob(f"{tdir}/*.jpg"), key=lambda x: int(os.path.splitext(os.path.basename(x))[0]))
                 
                 num_steps = len(data['actions'][traj_idx])
-                if len(img_paths) != num_steps:
+                num_images = len(img_paths)
+                
+                # Use minimum length to handle mismatched data
+                if num_images == 0 or num_steps == 0:
+                    print(f"🔍 Skipping traj {traj_idx}: {num_images} images, {num_steps} actions - one is empty")
+                    continue
+                
+                # Use the minimum of available images and actions
+                min_steps = min(num_images, num_steps)
+                if min_steps < 5:  # Skip very short trajectories
+                    print(f"🔍 Skipping traj {traj_idx}: only {min_steps} valid steps")
                     continue
 
-                for step_idx in range(num_steps):
+                for step_idx in range(min_steps):
                     all_trajectories.append({
                         'image_path': img_paths[step_idx],
                         'state': data['state'][traj_idx][step_idx][:7],
                         'action': data['actions'][traj_idx][step_idx],
                         'prompt': f"In: What action should the robot take to {task.replace('-', ' ')}? State:"
                     })
+        
+        print(f"🔍 Total trajectories loaded: {len(all_trajectories)}")
         return all_trajectories
 
     def __len__(self):
@@ -475,70 +506,116 @@ class Trainer:
         self.tokenizer = AutoTokenizer.from_pretrained(self.config.model_path, use_fast=False, trust_remote_code=True)
         self.tokenizer.pad_token = self.tokenizer.unk_token
         
-        # Manually resize position embeddings
+        # 🔥 CRITICAL FIX: Properly resize vision tower for target image size
         vision_tower = self.model.get_vision_tower()
         vision_tower.to(device=self.device, dtype=torch.float32)
         
         vision_config = vision_tower.vision_model.config
+        original_image_size = vision_config.image_size
+        target_image_size = self.config.image_size
 
-        # Calculate how many patch positions **should** exist for the target image size
-        expected_num_positions = (self.config.image_size // vision_config.patch_size) ** 2 + 1
+        print(f"🔍 Vision tower current image size: {original_image_size}")
+        print(f"🔍 Target image size: {target_image_size}")
 
-        # Trigger a resize if *either* the configured image size differs from the model
-        # or the current position-embedding table does not have the expected length.
-        needs_resize = (
-            self.config.image_size != vision_config.image_size or
-            vision_tower.vision_model.embeddings.position_embedding.weight.size(0) != expected_num_positions
-        )
-
-        if needs_resize:
-            print(f"🔄 Overriding vision tower image size from {vision_config.image_size} to {self.config.image_size}")
+        # Always resize if sizes don't match
+        if original_image_size != target_image_size:
+            print(f"🔄 Resizing vision tower from {original_image_size} to {target_image_size}")
             
-            vision_config.image_size = self.config.image_size
+            # Calculate positions for both original and target sizes
+            original_patch_size = vision_config.patch_size
+            original_num_patches = (original_image_size // original_patch_size) ** 2
+            original_num_positions = original_num_patches + 1  # +1 for CLS token
+            
+            target_num_patches = (target_image_size // original_patch_size) ** 2
+            target_num_positions = target_num_patches + 1
+            
+            print(f"🔍 Original: {original_num_patches} patches, {original_num_positions} positions")
+            print(f"🔍 Target: {target_num_patches} patches, {target_num_positions} positions")
+            
+            # Update vision config
+            vision_config.image_size = target_image_size
+            
+            # Save original position embeddings
             original_pos_embedding = vision_tower.vision_model.embeddings.position_embedding
-            original_num_positions = original_pos_embedding.weight.size(0)
+            original_weights = original_pos_embedding.weight.data.clone()
             
-            vision_tower.vision_model.embeddings.num_patches = (vision_config.image_size // vision_config.patch_size) ** 2
-            new_num_positions = vision_tower.vision_model.embeddings.num_patches + 1
-            vision_tower.vision_model.embeddings.num_positions = new_num_positions
-
+            # Update embedding dimensions
+            vision_tower.vision_model.embeddings.num_patches = target_num_patches
+            vision_tower.vision_model.embeddings.num_positions = target_num_positions
+            
+            # Create new position embedding layer
             new_pos_embedding = nn.Embedding(
-                new_num_positions,
+                target_num_positions,
                 vision_config.hidden_size
             ).to(self.device, dtype=torch.float32)
-
-            print("🔄 Interpolating position embeddings...")
-            cls_token = original_pos_embedding.weight[0, :].unsqueeze(0)
-            patch_embeddings = original_pos_embedding.weight[1:, :]
             
-            original_grid_size = int(math.sqrt(original_num_positions - 1))
-            new_grid_size = int(math.sqrt(new_num_positions - 1))
-
-            patch_embeddings = patch_embeddings.reshape(original_grid_size, original_grid_size, -1).permute(2, 0, 1).unsqueeze(0)
+            # Handle interpolation
+            if target_num_positions != original_num_positions:
+                print("🔄 Interpolating position embeddings...")
+                
+                # Extract CLS token (first position)
+                cls_token = original_weights[0:1, :]  # [1, hidden_size]
+                
+                # Extract patch embeddings (skip CLS token)
+                patch_embeddings = original_weights[1:, :]  # [original_num_patches, hidden_size]
+                
+                # Reshape for interpolation
+                original_grid_size = int(math.sqrt(original_num_patches))
+                target_grid_size = int(math.sqrt(target_num_patches))
+                
+                # Reshape to 2D grid: [hidden_size, grid_size, grid_size]
+                patch_embeddings_2d = patch_embeddings.T.reshape(
+                    vision_config.hidden_size, original_grid_size, original_grid_size
+                ).unsqueeze(0)  # [1, hidden_size, grid_size, grid_size]
+                
+                # Interpolate to target size
+                interpolated_embeddings = F.interpolate(
+                    patch_embeddings_2d,
+                    size=(target_grid_size, target_grid_size),
+                    mode='bicubic',
+                    align_corners=False
+                )
+                
+                # Reshape back: [target_num_patches, hidden_size]
+                interpolated_patch_embeddings = interpolated_embeddings.squeeze(0).reshape(
+                    vision_config.hidden_size, -1
+                ).T
+                
+                # Set new position embeddings
+                new_pos_embedding.weight.data[0:1, :] = cls_token
+                new_pos_embedding.weight.data[1:, :] = interpolated_patch_embeddings
+                
+            else:
+                # Same size, just copy
+                new_pos_embedding.weight.data.copy_(original_weights)
             
-            interpolated_patch_embeddings = F.interpolate(
-                patch_embeddings,
-                size=(new_grid_size, new_grid_size),
-                mode='bicubic',
-                align_corners=False
-            )
-            
-            interpolated_patch_embeddings = interpolated_patch_embeddings.squeeze(0).permute(1, 2, 0).reshape(new_num_positions - 1, -1)
-            
-            new_pos_embedding.weight.data[0, :] = cls_token
-            new_pos_embedding.weight.data[1:, :] = interpolated_patch_embeddings
-
+            # Replace the position embedding
             vision_tower.vision_model.embeddings.position_embedding = new_pos_embedding
-            vision_tower.vision_model.embeddings.position_ids = torch.arange(new_num_positions).expand((1, -1)).to(self.device)
             
-            print("✅ Vision tower position embeddings resized.")
-
-        # No separate image processor needed; dataset handles raw images.
-
-        # Note: LoRA insertion, optional gradient-checkpointing and parameter
-        # initialisation are now handled **once** in `Trainer._setup()` to
-        # avoid double-wrapping the model, which used to corrupt weights and
-        # cause early NaNs.
+            # Update position_ids
+            vision_tower.vision_model.embeddings.position_ids = torch.arange(
+                target_num_positions
+            ).expand((1, -1)).to(self.device)
+            
+            print(f"✅ Vision tower resized to {target_image_size}x{target_image_size}")
+            print(f"✅ Position embeddings: {target_num_positions} positions")
+            
+        else:
+            print(f"✅ Vision tower already matches target size: {target_image_size}")
+        
+        # 🔥 ADDITIONAL FIX: Ensure the model config reflects the change
+        if hasattr(self.model.config, 'vision_config'):
+            if isinstance(self.model.config.vision_config, dict):
+                self.model.config.vision_config['image_size'] = target_image_size
+            else:
+                self.model.config.vision_config.image_size = target_image_size
+        
+        # Verify the change took effect
+        final_image_size = vision_tower.vision_model.config.image_size
+        if final_image_size != target_image_size:
+            print(f"⚠️ Warning: Vision tower size mismatch! Expected {target_image_size}, got {final_image_size}")
+        else:
+            print(f"✅ Verified: Vision tower now expects {final_image_size}x{final_image_size} images")
 
     def _setup_lora(self):
         print("🔄 Setting up LoRA...")
@@ -735,7 +812,41 @@ class Trainer:
     def save_checkpoint(self, step, loss_value, is_best=False):
         checkpoint_dir = os.path.join(self.config.output_dir, f"step_{step}")
         os.makedirs(checkpoint_dir, exist_ok=True)
+        
+        # Save LoRA adapter weights
         self.model.save_pretrained(checkpoint_dir)
+        
+        # 🔥 CRITICAL FIX: Save diffusion head weights separately when training enabled
+        if self.config.train_diffusion_head:
+            diffusion_state_dict = {}
+            for name, param in self.model.named_parameters():
+                if 'embed_out' in name and param.requires_grad:
+                    # Remove any PEFT prefixes to get the actual parameter name
+                    clean_name = name.replace('base_model.model.', '')
+                    diffusion_state_dict[clean_name] = param.data.clone()
+            
+            if diffusion_state_dict:
+                # Save to step directory
+                diffusion_path = os.path.join(checkpoint_dir, "diffusion_head.bin")
+                torch.save(diffusion_state_dict, diffusion_path)
+                print(f"💾 Saved {len(diffusion_state_dict)} diffusion head parameters to {diffusion_path}")
+                
+                # 🎯 Save to configurable diffusion head directory
+                vla_diff_dir = self.config.diffusion_head_save_dir  # Use config parameter instead of hardcoded path
+                os.makedirs(vla_diff_dir, exist_ok=True)
+                
+                # Save latest checkpoint
+                latest_diff_path = os.path.join(vla_diff_dir, f"diffusion_head_step_{step}.bin")
+                torch.save(diffusion_state_dict, latest_diff_path)
+                
+                # Save as "latest" for easy loading
+                latest_symlink = os.path.join(vla_diff_dir, "diffusion_head_latest.bin")
+                torch.save(diffusion_state_dict, latest_symlink)
+                
+                print(f"💾 Also saved diffusion head to {latest_diff_path}")
+                print(f"💾 Updated latest diffusion head: {latest_symlink}")
+            else:
+                print("⚠️ No diffusion head parameters found to save!")
         
         checkpoint_data = {
             'step': step,
@@ -763,6 +874,19 @@ class Trainer:
         global_step = 0
         consecutive_nan_count = 0
         max_consecutive_nans = 3
+        
+        # Calculate batches per epoch for epoch/batch display
+        batches_per_epoch = len(self.data_loader)
+        total_epochs = (self.config.max_steps + batches_per_epoch - 1) // batches_per_epoch  # Ceiling division
+        
+        # 🔥 MEMORY MANAGEMENT: Set up memory optimization
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            # Set memory fraction to prevent OOM (very conservative)
+            torch.cuda.set_per_process_memory_fraction(0.6)
+            print(f"🔧 Set CUDA memory fraction to 0.6")
+        
+        print(f"🚀 Starting training: {batches_per_epoch} batches/epoch, ~{total_epochs} epochs, {self.config.max_steps} total steps")
         
         with tqdm(total=self.config.max_steps, desc="Training") as pbar:
             # --------------------------------------------------------------
@@ -803,24 +927,43 @@ class Trainer:
                     print("✅ Sanity backward pass succeeded")
                 else:
                     print("⚠️  Sanity loss does not require grad; check trainable params list")
+                    
+                # 🔥 MEMORY CLEANUP after sanity test
+                del test_loss, out, test_batch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    
             except Exception as e:
                 print(f"⚠️  Sanity-test skipped due to error: {e}")
 
             while global_step < self.config.max_steps:
-                for batch in self.data_loader:
+                for batch_idx, batch in enumerate(self.data_loader):
                     if global_step >= self.config.max_steps:
                         break
+
+                    # Calculate epoch and batch within epoch
+                    current_epoch = global_step // batches_per_epoch
+                    batch_in_epoch = global_step % batches_per_epoch
 
                     for key, value in batch.items():
                         if torch.is_tensor(value):
                             batch[key] = value.to(self.device)
                     
+                    # 🔥 MEMORY MANAGEMENT: Regular cleanup every N steps
+                    if global_step > 0 and self.config.max_memory_cleanup_steps > 0 and global_step % self.config.max_memory_cleanup_steps == 0:
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                            # Get memory stats
+                            allocated = torch.cuda.memory_allocated() / 1024**3
+                            reserved = torch.cuda.memory_reserved() / 1024**3
+                            print(f"🧹 Memory cleanup at epoch {current_epoch}, batch {batch_in_epoch}: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved")
+                    
                     with torch.cuda.amp.autocast(enabled=self.config.use_bf16):
                         outputs = self.model(**batch)
-                        
+
                         # Check if outputs are valid
                         if outputs is None:
-                            print(f"💥 Model outputs are None at step {global_step}, skipping batch.")
+                            print(f"💥 Model outputs are None at epoch {current_epoch}, batch {batch_in_epoch}, skipping batch.")
                             consecutive_nan_count += 1
                             if consecutive_nan_count >= max_consecutive_nans:
                                 print("🛑 Stopping training due to consecutive None outputs.")
@@ -834,7 +977,7 @@ class Trainer:
                             
                             # Check if logits contain NaN/Inf
                             if torch.isnan(logits).any() or torch.isinf(logits).any():
-                                print(f"💥 NaN/Inf detected in logits at step {global_step}, skipping batch.")
+                                print(f"💥 NaN/Inf detected in logits at epoch {current_epoch}, batch {batch_in_epoch}, skipping batch.")
                                 consecutive_nan_count += 1
                                 if consecutive_nan_count >= max_consecutive_nans:
                                     print("🛑 Stopping training due to consecutive NaN logits.")
@@ -848,10 +991,10 @@ class Trainer:
                         elif hasattr(outputs, 'loss') and outputs.loss is not None:
                             # Action prediction model path (VLA models)
                             loss = outputs.loss
-                            print(f"🎯 Using action prediction loss: {loss.item():.4f}")
+                            print(f"🎯 Using action prediction loss at epoch {current_epoch}, batch {batch_in_epoch}: {loss.item():.4f}")
                             
                         else:
-                            print(f"💥 Model outputs don't contain expected loss or logits at step {global_step}, skipping batch.")
+                            print(f"💥 Model outputs don't contain expected loss or logits at epoch {current_epoch}, batch {batch_in_epoch}, skipping batch.")
                             consecutive_nan_count += 1
                             if consecutive_nan_count >= max_consecutive_nans:
                                 print("🛑 Stopping training due to consecutive invalid outputs.")
@@ -859,7 +1002,7 @@ class Trainer:
                             continue
 
                     if torch.isnan(loss) or torch.isinf(loss):
-                        print(f"💥 NaN/Inf detected in loss at step {global_step}, skipping.")
+                        print(f"💥 NaN/Inf detected in loss at epoch {current_epoch}, batch {batch_in_epoch}, skipping.")
                         consecutive_nan_count += 1
                         if consecutive_nan_count >= max_consecutive_nans:
                             print("🛑 Stopping training due to consecutive NaN losses.")
@@ -873,6 +1016,14 @@ class Trainer:
                         self.scaler.scale(loss).backward()
                     else:
                         loss.backward()
+
+                    # 🔥 MEMORY CLEANUP: Delete intermediate tensors
+                    del outputs
+                    if torch.cuda.is_available():
+                        # Only clear cache occasionally to avoid overhead (fix division by zero)
+                        cleanup_interval = max(1, self.config.max_memory_cleanup_steps // 2) if self.config.max_memory_cleanup_steps > 0 else 50
+                        if global_step % cleanup_interval == 0:
+                            torch.cuda.empty_cache()
 
                     if (global_step + 1) % self.config.gradient_accumulation_steps == 0:
                         # Manual LR adjustment
@@ -892,7 +1043,7 @@ class Trainer:
                             self.config.gradient_clip_norm
                         )
                         if torch.isnan(total_norm) or torch.isinf(total_norm) or total_norm > 1e4:
-                            print(f"🚨 Abnormal grad-norm {total_norm:.2e} – skipping optimiser step at global step {global_step}")
+                            print(f"🚨 Abnormal grad-norm {total_norm:.2e} – skipping optimiser step at epoch {current_epoch}, batch {batch_in_epoch}")
                             self.optimizer.zero_grad(set_to_none=True)
                             # Skip weight update and move on to next batch
                             continue
@@ -908,20 +1059,31 @@ class Trainer:
                         self.optimizer.zero_grad()
                     
                     pbar.update(1)
-                    # Only update description if loss is a finite tensor
+                    # Update progress bar with epoch/batch info instead of just step
                     if torch.is_tensor(loss):
                         try:
-                            pbar.set_description(f"Step {global_step}, Loss: {loss.item():.4f}, LR: {self.optimizer.param_groups[0]['lr']:.6f}")
+                            pbar.set_description(f"Epoch {current_epoch}, Batch {batch_in_epoch}/{batches_per_epoch-1}, Loss: {loss.item():.4f}, LR: {self.optimizer.param_groups[0]['lr']:.6f}")
                         except (ValueError, TypeError):
-                            pbar.set_description(f"Step {global_step}, Loss: nan, LR: {self.optimizer.param_groups[0]['lr']:.6f}")
+                            pbar.set_description(f"Epoch {current_epoch}, Batch {batch_in_epoch}/{batches_per_epoch-1}, Loss: nan, LR: {self.optimizer.param_groups[0]['lr']:.6f}")
                     
                     if global_step > 0 and global_step % self.config.save_steps == 0:
+                        print(f"💾 Saving checkpoint at epoch {current_epoch}, batch {batch_in_epoch} (step {global_step})")
                         self.save_checkpoint(global_step, loss.item())
+                        
+                        # 🔥 MEMORY CLEANUP after checkpoint save
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                            print(f"🧹 Memory cleanup after checkpoint save")
 
                     global_step += 1
 
-        print("\n🎉 Training finished.")
+        print(f"\n🎉 Training finished after {current_epoch + 1} epochs.")
         self.save_checkpoint(global_step, loss.item())
+        
+        # 🔥 FINAL MEMORY CLEANUP
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.reset_peak_memory_stats()
 
 # 🔧 Safety patch: robustify ConditionalResidualBlock1D to zero-out NaNs early
 from TinyVLA.policy_heads.models.droid_unet_diffusion import ConditionalResidualBlock1D as _CRB1D_Old
@@ -974,7 +1136,7 @@ def main():
     # Load configuration from YAML file
     with open(args.config, 'r') as f:
         config_dict = yaml.safe_load(f)
-    
+
     # Ensure LR fields are numeric floats (YAML may leave them as strings like '1e-5')
     for lr_key in ["learning_rate", "diffusion_learning_rate", "gradient_clip_norm", "weight_decay"]:
         if isinstance(config_dict.get(lr_key, 0), str):

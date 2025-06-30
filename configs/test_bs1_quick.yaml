@@ -1,0 +1,38 @@
+# Quick test for batch_size=1 with diffusion head saving
+model_path: VLA_weights/Llava-Pythia-400M
+output_dir: test_bs1_quick
+data_root: datasets/short-MetaWorld/short-MetaWorld/r3m-processed/r3m_MT10_20  # Contains .pkl files
+train_tasks: pick-place-v2
+
+# LoRA settings 
+lora_r: 4
+lora_alpha: 8
+lora_dropout: 0.1
+
+# Quick test parameters
+batch_size: 1                     # Test batch_size=1
+gradient_accumulation_steps: 4    # Small accumulation for quick test
+learning_rate: 1e-6
+diffusion_learning_rate: 5e-7
+max_steps: 10                     # Very quick test
+save_steps: 10                    # Save at end
+train_diffusion_head: true       # 🔥 TEST DIFFUSION HEAD SAVING
+
+# Memory optimization
+use_bf16: false
+use_gradient_checkpointing: false
+freeze_vision_encoder: true
+cpu_offload: false
+max_memory_cleanup_steps: 10
+chunk_size: 16
+image_size: 336
+
+# Dataloader settings
+dataloader_num_workers: 1
+pin_memory: false
+persistent_workers: false
+
+# Stability settings
+gradient_clip_norm: 0.3
+warmup_steps: 5
+weight_decay: 0.01 

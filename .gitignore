@@ -51,16 +51,12 @@ env/
 # Jupyter Notebook
 .ipynb_checkpoints
 
-# PyTorch
-*.pth
-*.pt
-*.bin
-
 # ==============================================================================
-# LARGE FILES - Exclude from Git due to size limits
+# MODEL WEIGHTS & CHECKPOINTS - Exclude from Git due to size limits
 # ==============================================================================
 
-# Model weights and checkpoints (>100MB GitHub limit)
+# Model weight directories (>100MB GitHub limit)
+VLA_weights/
 VLM_weights/
 *.safetensors
 *.bin
@@ -69,24 +65,40 @@ VLM_weights/
 *.ckpt
 *.model
 
-# Training state files (very large)
+# Training checkpoints and states (very large)
+checkpoints/
 */training_state.pt
 training_state.pt
+*/step_*/
+step_*/
+full_training_*/
 
-# Datasets (multi-GB files)
+# Specific model directories
+Llava-Pythia-400M/
+lora_adapter/
+diff_head/
+diffusion_head/
+
+# ==============================================================================
+# DATASETS & DATA FILES - Large data files
+# ==============================================================================
+
+# Dataset directories and files (multi-GB files)
+datasets/
 *.h5
 *.hdf5
 metaworld_dataset.h5
 metaworld_dataset.*
-datasets/*.h5
-datasets/*.hdf5
+short-MetaWorld/
 
-# Checkpoint directories
-checkpoints/
-publication_checkpoints/
-model_checkpoints/
-*/step_*/
-step_*/
+# Pickle files (exclude large ones, keep small stats)
+*.pkl
+# Exception: Keep small normalization stats
+!metaworld_stats.pkl
+
+# Data processing outputs
+r3m-processed/
+img-only/
 
 # ==============================================================================
 # LOGS AND TEMPORARY FILES
@@ -100,6 +112,7 @@ events.out.tfevents.*
 wandb/
 tensorboard/
 runs/
+log/
 
 # Temporary files
 tmp/
@@ -118,6 +131,42 @@ ehthumbs.db
 Thumbs.db
 
 # ==============================================================================
+# EVALUATION & RESULTS - Can be large or frequently changing
+# ==============================================================================
+
+# Evaluation results (can be large)
+evaluation_results/
+pipeline_results/
+publication_results/
+
+# Analysis and debug outputs
+analysis/
+debug_*/
+inference_scripts/
+training_scripts/
+test_bs1_quick/
+test_diffusion_fix/
+
+# ==============================================================================
+# MULTIMEDIA FILES - Images, videos, etc.
+# ==============================================================================
+
+# Common image formats
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.bmp
+*.tiff
+
+# Video files
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+
+# ==============================================================================
 # PROJECT-SPECIFIC EXCLUSIONS
 # ==============================================================================
 
@@ -126,24 +175,23 @@ metaworld_v1/
 mujoco_log.txt
 MUJOCO_LOG.TXT
 
-# Evaluation results (can be large)
-evaluation_results/*.json
-evaluation_results/*.pkl
-publication_results/
+# Conda/Python environment files
+environment.yml
+environment.yaml
 
-# Analysis and debug outputs
-analysis/
-debug_*/
-inference_scripts/
-training_scripts/
-
-# Documentation (keep only main README)
+# Documentation builds (keep only main README)
 docs/
+documentation/
 
-# Test files
+# Test files and directories
 test_*/
 *_test.py
 testing/
+
+# Backup files
+*.bak
+*.backup
+*~
 
 # ==============================================================================
 # KEEP THESE IMPORTANT FILES (explicit inclusions)
@@ -151,51 +199,56 @@ testing/
 
 # Core scripts (always include)
 !tinyvla_loader.py
-!minimal_pickplace_demo.py  
-!fast_tinyvla_demo.py
+!metaworld_pickplace_demo.py
 !train_lora.py
-!README.md
-!requirements_lora_vla.txt
+!benchmark_vla.py
+!test_model_loading.py
+!debug_prediction.py
+!check_weights.py
+!calculate_metaworld_stats.py
 
-# Small config and stats files
+# Configuration files (small, important)
 !configs/
-!metaworld_stats.pkl
+!configs/**/*.yaml
+!configs/**/*.yml
 
-# Small text files
+# Documentation and setup
+!README.md
+!TRAINING_COMMANDS.md
+!CHECKLIST.md
+!requirements_lora_vla.txt
 !*.md
 !*.txt
-!*.yaml
-!*.yml
 
+# Small essential data files
+!metaworld_stats.pkl
+
+# Git and project files
+!.gitignore
+!LICENSE
+
+# ==============================================================================
+# SPECIFIC FILE EXCLUSIONS (from current directory structure)
+# ==============================================================================
+
+# Voice chat and other experimental scripts
 voicechat_smolvlm_2.py
-VLM_weights/Llava-Pythia-400M/config.json
-VLM_weights/Llava-Pythia-400M/generation_config.json
-VLM_weights/Llava-Pythia-400M/model.safetensors
-VLM_weights/Llava-Pythia-400M/special_tokens_map.json
-VLM_weights/Llava-Pythia-400M/tokenizer_config.json
-VLM_weights/Llava-Pythia-400M/tokenizer.json
-VLM_weights/Llava-Pythia-400M/trainer_state.json
-VLM_weights/Llava-Pythia-400M/training_args.bin
-VLM_weights/Llava-Pythia-400M/preprocessor_config.json
-datasets/short-MetaWorld/short-MetaWorld/img-only
-datasets/short-MetaWorld/short-MetaWorld/r3m-processed
 
-# General rules for large files and data
-checkpoints/
-datasets/
+# TinyVLA build artifacts
+TinyVLA/*.egg-info/
+TinyVLA/act.egg-info/
+TinyVLA/policy_heads/policy_heads.egg-info/
 
-# Ignore common image formats
-*.jpg
-*.jpeg
-*.png
-*.gif
+# Shell scripts that might contain sensitive paths
+*.sh
+!TinyVLA/scripts/train.sh
 
-# Ignore generated videos
-*.mp4
-*.avi
-*.mov
+# Additional test/debug scripts (keep main ones)
+simple_debug.py
+fixed_inference.py
+debug_inference.py
+tinyvla_test.py
 
-# Python cache and logs
-__pycache__/
-*.log
-*.TXT
+# Pipeline and benchmark outputs
+test_pipeline.sh
+pipeline_results/

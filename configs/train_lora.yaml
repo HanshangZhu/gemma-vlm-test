@@ -9,8 +9,8 @@ lora_dropout: 0.05
 # --- Training Loop Parameters ---
 batch_size: 1
 gradient_accumulation_steps: 4  # Reduced back to original value
-learning_rate: 1e-5
-diffusion_learning_rate: 1e-5
+learning_rate: 1e-6  # 🔥 REDUCED from 1e-5 - too high for language modeling
+diffusion_learning_rate: 1e-6  # 🔥 REDUCED proportionally
 max_steps: 20000  # Approximately 50 epochs for a dataset of ~1500 samples
 save_steps: 1000
 output_dir: "./VLM_weights/lora_adapter"
@@ -27,7 +27,7 @@ train_diffusion_head: true  # Enable diffusion head training for VLA models
 cpu_offload: false  # Disable CPU offloading temporarily  
 max_memory_cleanup_steps: 5  # More frequent cleanup
 chunk_size: 16  # Reduced chunk size
-image_size: 224  # Reduced image size from 336 to 224 to save memory
+image_size: 336  # Model expects 336x336 images
 
 # --- Advanced Dataloader Options ---
 dataloader_num_workers: 1  # Reduced workers to save memory
