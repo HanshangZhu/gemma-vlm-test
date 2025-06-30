@@ -240,7 +240,7 @@ TinyVLA/act.egg-info/
 TinyVLA/policy_heads/policy_heads.egg-info/
 
 # Shell scripts that might contain sensitive paths
-*.sh
+#*.sh
 !TinyVLA/scripts/train.sh
 
 # Additional test/debug scripts (keep main ones)
