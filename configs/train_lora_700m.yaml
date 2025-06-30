@@ -1,7 +1,7 @@
 # VLA LoRA Training Configuration
 
 # --- Core Model & LoRA Parameters ---
-model_path: "VLM_weights/Llava-Pythia-400M"
+model_path: "lesjie/Llava-Pythia-700M"  # Upgraded backbone
 lora_r: 4  # Reduced from 8 for better stability
 lora_alpha: 8  # Reduced proportionally
 lora_dropout: 0.05
@@ -13,14 +13,19 @@ learning_rate: 1e-6  # 🔥 REDUCED from 1e-5 - too high for language modeling
 diffusion_learning_rate: 1e-6  # 🔥 REDUCED proportionally
 max_steps: 20000  # Approximately 50 epochs for a dataset of ~1500 samples
 save_steps: 1000
-output_dir: "./VLM_weights/lora_adapter"
+output_dir: "./VLM_weights/lora_adapter_$(date +%Y%m%d_%H%M%S)"  # Unique directory per run
+
+# diffusion head
+train_diffusion_head: true        # we still want to train it
+diffusion_warmup_steps: 1000      # keep embed_out frozen for the first 1 000 steps
+diffusion_head_save_dir: "./VLM_weights/diff_head"  # Where diffusion head checkpoints will live
 
 # --- Dataset Parameters ---
 data_root: "datasets/short-MetaWorld/short-MetaWorld/r3m-processed/r3m_MT10_20"
 train_tasks: "pick-place-v2,door-open-v2,drawer-close-v2"
 
 # --- Memory & Performance Optimization ---
-use_bf16: false  # Keep float32 for numerical stability
+use_bf16: true  # Keep float32 for numerical stability
 use_gradient_checkpointing: false  # Disable temporarily for debugging
 freeze_vision_encoder: true  # Keep frozen to save memory
 train_diffusion_head: true  # Enable diffusion head training for VLA models

@@ -27,6 +27,7 @@ from torchvision import transforms as T
 from tqdm import tqdm
 import glob
 from transformers.utils import logging as hf_logging
+from datasets import load_dataset  # NEW: HuggingFace Datasets for MT50
 
 # ---------------------------------------------------------------------------
 # Path setup BEFORE heavy imports
@@ -160,7 +161,7 @@ def apply_dimension_fixes():
 apply_dimension_fixes()
 
 # Heavy imports that rely on the paths above
-from llava_pythia.model.language_model.pythia.llava_pythia import LlavaPythiaForCausalLM
+from llava_pythia.model.language_model.pythia.llava_pythia import LlavaPythiaForCausalLM, LlavaPythiaConfig
 from policy_heads.models import ConditionalUnet1D
 
 # Silence irrelevant weight-mismatch warnings/info from Transformers (e.g., "Some weights of the model checkpoint were not used …")
@@ -214,6 +215,15 @@ class TrainingConfig:
     gradient_clip_norm: float
     warmup_steps: int
     weight_decay: float
+    diffusion_warmup_steps: int = 0  # if >0 keep embed_out frozen for first N steps
+    dataset_variant: str = "short"  # "short" (legacy) or "mt50"
+    # Debugging option: create synthetic MT50 dataset locally without downloads
+    dummy_mt50_samples: int = 0  # >0 activates 'mt50_dummy' variant implicitly
+    # Prompt engineering
+    prompt_style: str = "simple"  # "simple" or "detailed"
+    prompt_json_path: str = "datasets/mt50_task_prompts.json"
+    # Dataset validation options
+    validate_samples_count: int = 0  # 0 = skip, >0 = validate that many random samples.
 
 class MetaWorldDataset(torch.utils.data.Dataset):
     """MetaWorld dataset for multi-task robot learning."""
@@ -304,28 +314,188 @@ class MetaWorldDataset(torch.utils.data.Dataset):
         
         return image_tensor, state, action, prompt
 
+# =============================================================================
+# NEW: MT50 DATASET SUPPORT (lerobot/metaworld_mt50)
+# =============================================================================
+
+class MetaWorldMT50Dataset(torch.utils.data.Dataset):
+    """MT50 dataset fetched from HuggingFace (lerobot/metaworld_mt50)."""
+
+    HF_NAME = "lerobot/metaworld_mt50"
+
+    def __init__(self, config: TrainingConfig):
+        self.config = config
+
+        # Load split (non-streaming so we can random-access)
+        print("📥 Loading MT50 dataset from HuggingFace … (first call will download)")
+        self.ds = load_dataset(self.HF_NAME, split="train", cache_dir=os.getenv("HF_DATASETS_CACHE", None))
+
+        # Load prompt mapping JSON if available
+        self.prompt_map = {}
+        if os.path.isfile(config.prompt_json_path):
+            import json
+            with open(config.prompt_json_path, 'r') as f:
+                self.prompt_map = json.load(f)
+            print(f"📖 Loaded prompt map with {len(self.prompt_map)} tasks from {config.prompt_json_path}")
+        else:
+            print(f"⚠️ Prompt JSON {config.prompt_json_path} not found – using fallback prompts.")
+
+        # Image transform matching vision tower resolution
+        self.transform = T.Compose([
+            T.Resize((config.image_size, config.image_size)),
+            T.ToTensor(),
+        ])
+
+        # Pre-computed mapping from integer task_id to human-readable Meta-World task names.
+        # Index taken from official MT50 ordering.
+        self._task_names = [
+            "reach-v2", "push-v2", "pick-place-v2", "door-open-v2", "drawer-open-v2",
+            "drawer-close-v2", "button-press-topdown-v2", "button-press-v2", "button-press-wall-v2", "button-press-topdown-wall-v2",
+            "door-close-v2", "hammer-v2", "handle-press-side-v2", "handle-press-v2", "handle-pull-v2",
+            "handle-pull-side-v2", "lever-pull-v2", "peg-insert-side-v2", "pick-place-wall-v2", "push-wall-v2",
+            "reach-wall-v2", "shelf-place-v2", "sweep-into-v2", "sweep-v2", "window-open-v2",
+            "window-close-v2", "coffee-button-v2", "coffee-pull-v2", "coffee-push-v2", "dial-turn-v2",
+            "disassemble-v2", "door-lock-v2", "hand-insert-v2", "handover-v2", "lamp-turn-on-v2",
+            "pour-v2", "soccer-v2", "stick-push-v2", "stick-pull-v2", "switch-v2",
+            "basketball-v2", "faucet-open-v2", "faucet-close-v2", "ladle-pick-v2", "safepick-v2",
+            "safepush-v2", "scale-v2", "spoon-pick-v2", "tray-pick-v2", "utensil-pick-v2"
+        ]
+
+    def __len__(self):
+        return len(self.ds)
+
+    def __getitem__(self, idx):
+        row = self.ds[idx]
+
+        # HuggingFace image feature → PIL.Image
+        img = row["observation.image"]
+        if not isinstance(img, Image.Image):
+            img = Image.fromarray(img)
+        image_tensor = self.transform(img)
+
+        # We no longer use environment states for MT50 – provide zeros (7-D) as placeholder.
+        state = torch.zeros(7, dtype=torch.float32)
+        action = torch.tensor(row["action"], dtype=torch.float32)
+
+        # Prompt engineering from task_id → task name
+        tid = int(row.get("task_id", -1))
+        if 0 <= tid < len(self._task_names):
+            task_name = self._task_names[tid]
+        else:
+            task_name = f"task-{tid}"
+
+        # ---------------------------------------------------------------
+        # Prompt style selection
+        # ---------------------------------------------------------------
+        # Always sample style per item using 40/30/30 distribution
+        r = random.random()
+        if r < 0.40:
+            chosen_style = "simple"
+        elif r < 0.70:
+            chosen_style = "detailed"
+        else:
+            chosen_style = "very_detailed"
+
+        # Retrieve template or fallbacks
+        prompt_template = self.prompt_map.get(task_name, {}).get(chosen_style)
+        if prompt_template is None:
+            # Derive from less-detailed versions or a generic template
+            prompt_template = self.prompt_map.get(task_name, {}).get("detailed") or self.prompt_map.get(task_name, {}).get("simple")
+            if prompt_template is None:
+                prompt_template = f"Perform the task: {task_name.replace('-', ' ')}"
+
+        # Auto-augment for very_detailed when custom field absent
+        if chosen_style == "very_detailed" and self.prompt_map.get(task_name, {}).get("very_detailed") is None:
+            prompt_template = (
+                prompt_template +
+                " Provide fine-grained control: approach with the end-effector aligned, adjust orientation as needed, "
+                "close the gripper gently, verify stable grasp/activation, and hold the pose for 0.5 s to ensure success."
+            )
+
+        prompt = f"<image>\n{prompt_template}"
+
+        return image_tensor, state, action, prompt
+
+# -----------------------------------------------------------------------------
+# DUMMY variant – generates small synthetic set for local debugging
+# -----------------------------------------------------------------------------
+
+class MetaWorldMT50DummyDataset(torch.utils.data.Dataset):
+    """Small synthetic dataset with MT50-like shapes to debug the pipeline."""
+
+    def __init__(self, config: TrainingConfig, n_samples: int = 100):
+        self.n = max(1, n_samples)
+        self.config = config
+
+    def __len__(self):
+        return self.n
+
+    def __getitem__(self, idx):
+        # Random RGB image tensor in [0,1]
+        image_tensor = torch.rand(3, self.config.image_size, self.config.image_size)
+
+        # Random state (7-D) and action (4-D) in reasonable ranges
+        state = torch.randn(7).clamp(-1, 1)
+        action = torch.randn(4).clamp(-1, 1)
+
+        prompt = "In: What action should the robot take? State:"
+        return image_tensor, state, action, prompt
+
 def get_dataset_and_stats(config: TrainingConfig):
-    dataset = MetaWorldDataset(config)
-    
-    states_list = [item[1] for item in dataset]
-    actions_list = [item[2] for item in dataset]
-    
-    states = torch.stack(states_list, dim=0)
-    actions = torch.stack(actions_list, dim=0)
-    
+    """Factory that returns the chosen dataset and (mean/std) stats."""
+
+    variant = config.dataset_variant.lower()
+
+    # Allow quick local debugging without heavy downloads
+    if variant == "mt50_dummy" or (variant == "mt50" and config.dummy_mt50_samples > 0):
+        dummy_n = config.dummy_mt50_samples or 100
+        dataset = MetaWorldMT50DummyDataset(config, n_samples=dummy_n)
+        # Gather stats over full dummy set – tiny, so fine
+        states = torch.stack([dataset[i][1] for i in range(len(dataset))])
+        actions = torch.stack([dataset[i][2] for i in range(len(dataset))])
+
+    elif variant == "mt50":
+        dataset = MetaWorldMT50Dataset(config)
+
+        # Compute running mean/std on a sample subset (to save RAM)
+        max_samples = min(20000, len(dataset))
+        print(f"📊 Computing stats on {max_samples} random MT50 samples …")
+
+        rng = torch.Generator().manual_seed(42)
+        indices = torch.randint(high=len(dataset), size=(max_samples,), generator=rng)
+
+        # online algorithm
+        state_acc = []
+        action_acc = []
+        for idx in indices:
+            _, state, action, _ = dataset[int(idx)]
+            state_acc.append(state)
+            action_acc.append(action)
+
+        states = torch.stack(state_acc)
+        actions = torch.stack(action_acc)
+
+    else:
+        # Legacy short-MetaWorld dataset
+        dataset = MetaWorldDataset(config)
+        states_list = [item[1] for item in dataset]
+        actions_list = [item[2] for item in dataset]
+        states = torch.stack(states_list)
+        actions = torch.stack(actions_list)
+
     stats = {
         'state_mean': states.mean(dim=0),
         'state_std': states.std(dim=0) + 1e-6,
         'action_mean': actions.mean(dim=0),
         'action_std': actions.std(dim=0) + 1e-6,
     }
-    
-    # Debug: Print action statistics to check for extreme values
-    print(f"🔍 Action statistics:")
+
+    # Debug
+    print("🔍 Action statistics:")
     print(f"  - Action mean: {stats['action_mean']}")
     print(f"  - Action std: {stats['action_std']}")
     print(f"  - Action raw min/max: [{actions.min():.4f}, {actions.max():.4f}]")
-    
+
     return dataset, stats
 
 class CollateFn:
@@ -472,23 +642,44 @@ class Trainer:
 
     def _setup_dataset_and_stats(self):
         print("🔄 Creating dataset...")
-        dataset, self.stats = get_dataset_and_stats(self.config)
-        print(f"✅ Dataset created with {len(dataset)} samples.")
+        self.dataset, self.stats = get_dataset_and_stats(self.config)
+        print(f"✅ Dataset created with {len(self.dataset)} samples.")
 
         # ------------------------------------------------------------------
-        # Extensive dataset validation
+        # Optional quick validation – can be skipped to speed up debug runs
         # ------------------------------------------------------------------
-        nan_img = nan_state = nan_action = 0
-        for idx, (img, state, action, prompt) in enumerate(dataset):
-            if torch.isnan(img).any() or torch.isinf(img).any():
-                nan_img += 1
-            if torch.isnan(state).any() or torch.isinf(state).any():
-                nan_state += 1
-            if torch.isnan(action).any() or torch.isinf(action).any():
-                nan_action += 1
-            if idx < 3:  # print first few samples for quick glance
-                print(f"🔍 Sample {idx}: state range [{state.min():.3f},{state.max():.3f}] | action range [{action.min():.3f},{action.max():.3f}] | img min/max [{img.min():.3f},{img.max():.3f}]")
-        print(f"✅ Dataset validation completed: NaN images:{nan_img}, NaN states:{nan_state}, NaN actions:{nan_action}")
+        n_validate_raw = getattr(self.config, "validate_samples_count", 0)
+        # Accept int or numeric string
+        try:
+            n_validate = int(n_validate_raw)
+        except (TypeError, ValueError):
+            n_validate = 0
+
+        if n_validate != 0:
+            validate_n = min(abs(n_validate), len(self.dataset))
+            if n_validate < 0:
+                # Negative means validate entire dataset (legacy behaviour)
+                validate_indices = range(len(self.dataset))
+            else:
+                # Random subset of n samples
+                validate_indices = torch.randperm(len(self.dataset))[:validate_n]
+
+            from tqdm import tqdm as _tqdm
+            nan_img = nan_state = nan_action = 0
+            for enum_idx, ds_idx in enumerate(_tqdm(validate_indices, desc="Validating dataset")):
+                img, state, action, prompt = self.dataset[int(ds_idx)]
+                if torch.isnan(img).any() or torch.isinf(img).any():
+                    nan_img += 1
+                if torch.isnan(state).any() or torch.isinf(state).any():
+                    nan_state += 1
+                if torch.isnan(action).any() or torch.isinf(action).any():
+                    nan_action += 1
+                if enum_idx < 3:
+                    print(f"🔍 Sample {enum_idx}: state range [{state.min():.3f},{state.max():.3f}] | action range [{action.min():.3f},{action.max():.3f}] | img min/max [{img.min():.3f},{img.max():.3f}]")
+
+            print(f"✅ Dataset validation completed on {validate_n} samples: NaN images:{nan_img}, NaN states:{nan_state}, NaN actions:{nan_action}")
+        else:
+            print("⏭️  Dataset validation skipped (validate_samples_count=0)")
 
         with open(os.path.join(self.config.output_dir, "stats.pkl"), "wb") as f:
             pickle.dump(self.stats, f)
@@ -496,8 +687,28 @@ class Trainer:
     def _setup_model_and_tokenizer(self):
         print("🔄 Loading model and tokenizer...")
 
+        # ------------------------------------------------------------------
+        # Construct a patched config FIRST so that custom VLA fields exist
+        # even for backbones that ship without them (e.g. Lesjie/Llava-Pythia-700M).
+        # ------------------------------------------------------------------
+
+        patched_cfg = LlavaPythiaConfig.from_pretrained(
+            self.config.model_path,
+            trust_remote_code=True,
+        )
+
+        # Inject/overwrite VLA-specific attributes (harmless if they already exist)
+        patched_cfg.action_head_type = 'droid_diffusion'
+        patched_cfg.action_dim = 4
+        patched_cfg.state_dim = 7
+        patched_cfg.chunk_size = self.config.chunk_size
+        patched_cfg.concat = 'token_cat'
+        patched_cfg.mm_use_im_start_end = True
+
+        # Now load the model with the patched config
         self.model = LlavaPythiaForCausalLM.from_pretrained(
             self.config.model_path,
+            config=patched_cfg,
             torch_dtype=torch.float32 if not self.config.use_bf16 else torch.bfloat16,
             device_map=self.device,
             trust_remote_code=True,
@@ -705,17 +916,24 @@ class Trainer:
                     torch.nn.init.zeros_(param.data)
         
         if self.config.train_diffusion_head:
-            print("🔄 Enabling training for diffusion head parameters...")
-            for name, param in self.model.named_parameters():
-                if 'embed_out' in name:
-                    param.requires_grad = True
-            
+            if self.config.diffusion_warmup_steps > 0:
+                print(f"🕒 Diffusion head will stay FROZEN for the first {self.config.diffusion_warmup_steps} steps (warm-up).")
+                for name, param in self.model.named_parameters():
+                    if 'embed_out' in name:
+                        param.requires_grad = False
+                # We will unfreeze later in the train() loop.
+                self._diffusion_unfrozen = False
+            else:
+                self._diffusion_unfrozen = True
+
             print("🔧 Applying GroupNorm epsilon fix...")
             for name, module in self.model.named_modules():
                 if isinstance(module, torch.nn.GroupNorm) and 'embed_out' in name:
                     module.eps = 1e-4
                 elif isinstance(module, torch.nn.LayerNorm) and 'embed_out' in name:
                     module.eps = 1e-4
+        else:
+            self._diffusion_unfrozen = False
 
         # ------------------------------------------------------------------
         # Final safety sweep: replace any NaN / Inf weights or biases **anywhere**.
@@ -796,7 +1014,11 @@ class Trainer:
 
     def _setup_dataloader(self):
         print("🔄 Creating DataLoader...")
-        dataset = MetaWorldDataset(self.config)
+        # Reuse dataset built earlier
+        dataset = getattr(self, 'dataset', None)
+        if dataset is None:
+            dataset, _ = get_dataset_and_stats(self.config)
+            self.dataset = dataset
         collate_fn = CollateFn(self.stats, self.tokenizer, self.config)
         self.data_loader = DataLoader(
             dataset,
@@ -1025,6 +1247,18 @@ class Trainer:
                         if global_step % cleanup_interval == 0:
                             torch.cuda.empty_cache()
 
+                    # ------------------------------------------------------
+                    # Late-unfreeze of diffusion head after warm-up
+                    # ------------------------------------------------------
+                    if (not self._diffusion_unfrozen and 
+                        global_step >= self.config.diffusion_warmup_steps):
+                        print(f"🟢 Unfreezing diffusion head at step {global_step} (warm-up finished)")
+                        for n,p in self.model.named_parameters():
+                            if 'embed_out' in n:
+                                p.requires_grad = True
+                        self._diffusion_unfrozen = True
+                        # No need to add new param groups; they already exist in the optimiser
+
                     if (global_step + 1) % self.config.gradient_accumulation_steps == 0:
                         # Manual LR adjustment
                         self._adjust_lr(global_step)
@@ -1144,6 +1378,34 @@ def main():
                 config_dict[lr_key] = float(config_dict[lr_key])
             except ValueError:
                 raise ValueError(f"Config value {lr_key}={config_dict[lr_key]} is not a valid float")
+
+    # ----------------------------------------------------------------------
+    # Post-processing tweaks
+    # 1. Auto-upgrade default 400M path if still present in config
+    # 2. Resolve/append timestamp to output_dir if it already exists or
+    #    contains literal shell placeholder $(date ...)
+    # ----------------------------------------------------------------------
+
+    # Upgrade backbone automatically if old 400M path was left in config
+    if config_dict.get("model_path", "").endswith("Llava-Pythia-400M"):
+        print("🔄 Detected 400M backbone in config – switching to 700M by default")
+        config_dict["model_path"] = "lesjie/Llava-Pythia-700M"
+
+    # Resolve output directory
+    out_dir_raw = config_dict.get("output_dir", "./outputs/lora_run")
+    # If bash substitution left literally in YAML, remove it and generate timestamp here
+    if "$(" in out_dir_raw or os.path.exists(out_dir_raw):
+        timestamp =  __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Strip potential shell command part
+        base_out = out_dir_raw.split("$(")[0].rstrip("/_") or "./outputs/lora_run"
+        new_out_dir = f"{base_out}_{timestamp}"
+        print(f"📁 Output directory resolved to {new_out_dir}")
+        config_dict["output_dir"] = new_out_dir
+
+    # Ensure a diffusion_head_save_dir is present
+    if "diffusion_head_save_dir" not in config_dict or not config_dict["diffusion_head_save_dir"]:
+        config_dict["diffusion_head_save_dir"] = os.path.join(config_dict["output_dir"], "diff_head")
+        print(f"📁 diffusion_head_save_dir set to {config_dict['diffusion_head_save_dir']}")
 
     config = TrainingConfig(**config_dict)
     

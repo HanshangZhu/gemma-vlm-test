@@ -66,7 +66,7 @@ class SimpleTinyVLA:
         action = vla.predict_action(image, robot_state, "pick up the red block")
     """
     
-    def __init__(self, base_model_path="VLA_weights/Llava-Pythia-400M", 
+    def __init__(self, base_model_path="lesjie/Llava-Pythia-700M", 
                  lora_checkpoint_path="VLA_weights/full_training_bs1_final/step_1000",
                  diffusion_weights_path="VLA_weights/diff_head/diffusion_head_latest.bin",
                  stats_path="metaworld_stats.pkl",
@@ -205,11 +205,16 @@ class SimpleTinyVLA:
             if os.path.exists(self.lora_checkpoint_path):
                 if self.debug:
                     print(f"🔧 Loading LoRA adapters from {self.lora_checkpoint_path}")
-                self.model = PeftModel.from_pretrained(
-                    self.base_model,              # Start with base model
-                    self.lora_checkpoint_path,    # Add specialized training from here
-                    torch_dtype=torch.float32     # Keep same precision
-                ).to(self.device)                 # Move to GPU/CPU
+                try:
+                    self.model = PeftModel.from_pretrained(
+                        self.base_model,              # Start with base model
+                        self.lora_checkpoint_path,    # Add specialized training from here
+                        torch_dtype=torch.float32     # Keep same precision
+                    ).to(self.device)                 # Move to GPU/CPU
+                except Exception as lora_err:
+                    # Gracefully fall back when LoRA weights are incompatible (e.g., different backbone size)
+                    print(f"⚠️ LoRA loading failed ({lora_err}). Falling back to base model only.")
+                    self.model = self.base_model.to(self.device)
             else:
                 print(f"⚠️ No LoRA checkpoint found at {self.lora_checkpoint_path}, using base model only")
                 self.model = self.base_model.to(self.device)
@@ -282,7 +287,12 @@ class SimpleTinyVLA:
             # ==================================================================
             
             # Image processor: Converts images to format the model expects
-            self.image_processor = CLIPImageProcessor.from_pretrained(self.base_model_path)
+            try:
+                self.image_processor = CLIPImageProcessor.from_pretrained(self.base_model_path)
+            except Exception as ip_err:
+                if self.debug:
+                    print(f"⚠️ Failed to load image processor from base model path ({ip_err}). Falling back to 'openai/clip-vit-base-patch32'.")
+                self.image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-base-patch32")
             
             # Import special tokens for images
             from llava_pythia.constants import DEFAULT_IMAGE_PATCH_TOKEN
@@ -664,7 +674,7 @@ class SimpleTinyVLA:
 
 def load_tinyvla(
     lora_checkpoint_path: str,
-    base_model_path: str = "VLA_weights/Llava-Pythia-400M",
+    base_model_path: str = "lesjie/Llava-Pythia-700M",
     diffusion_weights_path: str = "VLA_weights/diff_head/diffusion_head_latest.bin",
     stats_path: str = "metaworld_stats.pkl",
     device: str = "cuda" if torch.cuda.is_available() else "cpu",

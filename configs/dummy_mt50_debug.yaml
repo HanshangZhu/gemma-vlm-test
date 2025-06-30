@@ -1,0 +1,45 @@
+model_path: VLA_weights/Llava-Pythia-400M
+output_dir: test_mt50_dummy_run
+# Dummy dataset variant
+dataset_variant: mt50_dummy  # Activates MetaWorldMT50DummyDataset
+dummy_mt50_samples: 200      # Number of synthetic samples for quick run
+
+# These two fields can be arbitrary because dummy dataset doesn't use them, but keep for dataclass completeness
+data_root: datasets/short-MetaWorld/short-MetaWorld/r3m-processed/r3m_MT10_20
+train_tasks: pick-place-v2
+
+# LoRA settings
+lora_r: 4
+lora_alpha: 8
+lora_dropout: 0.1
+
+# Training hyperparameters (very small for dry run)
+batch_size: 2
+gradient_accumulation_steps: 2
+learning_rate: 1e-6
+diffusion_learning_rate: 5e-7
+max_steps: 5  # Keep extremely short
+save_steps: 5
+train_diffusion_head: true
+
+# Memory optimization
+use_bf16: false
+use_gradient_checkpointing: false
+freeze_vision_encoder: true
+cpu_offload: false
+max_memory_cleanup_steps: 5
+chunk_size: 8
+image_size: 336
+
+dataloader_num_workers: 0
+pin_memory: false
+persistent_workers: false
+
+gradient_clip_norm: 0.3
+warmup_steps: 2
+weight_decay: 0.01
+
+# Skip dataset validation for speed
+validate_samples_count: 0
+
+diffusion_head_save_dir: test_mt50_dummy_run/diff_head 
