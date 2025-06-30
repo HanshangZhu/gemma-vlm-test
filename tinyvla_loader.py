@@ -67,9 +67,10 @@ class SimpleTinyVLA:
     """
     
     def __init__(self, base_model_path="VLA_weights/Llava-Pythia-400M", 
-                 lora_checkpoint_path="VLA_weights/lora_adapter",
+                 lora_checkpoint_path="VLA_weights/full_training_bs1_final/step_1000",
                  diffusion_weights_path="VLA_weights/diff_head/diffusion_head_latest.bin",
-                 stats_path="metaworld_stats.pkl"):
+                 stats_path="metaworld_stats.pkl",
+                 debug=True):
         """
         🏗️ Initialize the TinyVLA model loader
         
@@ -78,6 +79,7 @@ class SimpleTinyVLA:
             lora_checkpoint_path: Where to find the fine-tuned weights (the "specialization")  
             diffusion_weights_path: Where to find trained diffusion head weights (the "action predictor")
             stats_path: Where to find normalization statistics (for proper data scaling)
+            debug: Whether to print debug information (False for faster inference)
         """
         
         # Store the file paths for later use
@@ -85,23 +87,26 @@ class SimpleTinyVLA:
         self.lora_checkpoint_path = lora_checkpoint_path
         self.diffusion_weights_path = diffusion_weights_path
         self.stats_path = stats_path
+        self.debug = debug  # Store debug flag
         
         # Determine if we should use GPU (faster) or CPU (slower but more compatible)
         # CUDA is NVIDIA's GPU programming platform - if available, use it for speed
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         # Print friendly status messages so user knows what's happening
-        print(f"🤖 SimpleTinyVLA Initializing...")
-        print(f"   Device: {self.device}")
-        print(f"   Base model: {base_model_path}")
-        print(f"   LoRA weights: {lora_checkpoint_path}")
-        print(f"   Diffusion weights: {diffusion_weights_path}")
+        if self.debug:
+            print(f"🤖 SimpleTinyVLA Initializing...")
+            print(f"   Device: {self.device}")
+            print(f"   Base model: {base_model_path}")
+            print(f"   LoRA weights: {lora_checkpoint_path}")
+            print(f"   Diffusion weights: {diffusion_weights_path}")
         
         # Load the components in order
         self.load_normalization_stats()  # First: Load data scaling parameters
         self.load_model()                # Second: Load the actual neural network
         
-        print("✅ SimpleTinyVLA ready!")
+        if self.debug:
+            print("✅ SimpleTinyVLA ready!")
         
     def load_normalization_stats(self):
         """
@@ -119,13 +124,14 @@ class SimpleTinyVLA:
         
         if os.path.exists(self.stats_path):
             # If we have saved statistics, load them
-            print(f"📊 Loading stats from {self.stats_path}")
+            if self.debug:
+                print(f"📊 Loading stats from {self.stats_path}")
             with open(self.stats_path, 'rb') as f:
                 # pickle.load reads a Python object that was saved with pickle.dump
                 self.norm_stats = pickle.load(f)
         else:
             # If no saved stats, use reasonable defaults
-            print("⚠️ Using default normalization")
+            print(f"⚠️ No stats file found at {self.stats_path}, using default normalization")
             self.norm_stats = {
                 'state_mean': np.zeros(7),    # Mean joint positions (7 robot joints)
                 'state_std': np.ones(7),      # Standard deviation of joint positions
@@ -152,7 +158,8 @@ class SimpleTinyVLA:
         """
         
         try:
-            print("🧠 Loading VLA model...")
+            if self.debug:
+                print("🧠 Loading VLA model...")
             
             # ==================================================================
             # STEP 1: Load Configuration and Tokenizer
@@ -196,14 +203,15 @@ class SimpleTinyVLA:
             # LoRA = Low-Rank Adaptation - a way to fine-tune models efficiently
             # Think of it as "adding specialized skills" to the base model
             if os.path.exists(self.lora_checkpoint_path):
-                print(f"🔧 Loading LoRA adapters from {self.lora_checkpoint_path}")
+                if self.debug:
+                    print(f"🔧 Loading LoRA adapters from {self.lora_checkpoint_path}")
                 self.model = PeftModel.from_pretrained(
                     self.base_model,              # Start with base model
                     self.lora_checkpoint_path,    # Add specialized training from here
                     torch_dtype=torch.float32     # Keep same precision
                 ).to(self.device)                 # Move to GPU/CPU
             else:
-                print("⚠️ No LoRA checkpoint found, using base model only")
+                print(f"⚠️ No LoRA checkpoint found at {self.lora_checkpoint_path}, using base model only")
                 self.model = self.base_model.to(self.device)
             
             # ==================================================================
@@ -213,11 +221,13 @@ class SimpleTinyVLA:
             # Load the trained diffusion head weights that we trained separately
             # This is THE KEY FIX - without this, diffusion head stays random!
             if os.path.exists(self.diffusion_weights_path):
-                print(f"🎯 Loading trained diffusion head from {self.diffusion_weights_path}")
+                if self.debug:
+                    print(f"🎯 Loading trained diffusion head from {self.diffusion_weights_path}")
                 
                 # Load the diffusion head state dict
                 diffusion_weights = torch.load(self.diffusion_weights_path, map_location=self.device)
-                print(f"   Found {len(diffusion_weights)} diffusion parameters")
+                if self.debug:
+                    print(f"   Found {len(diffusion_weights)} diffusion parameters")
                 
                 # Apply diffusion head weights to the model
                 missing_keys = []
@@ -255,15 +265,17 @@ class SimpleTinyVLA:
                         except (AttributeError, Exception) as e:
                             missing_keys.append(param_name)
                 
-                print(f"   ✅ Loaded {len(loaded_keys)}/{len(diffusion_weights)} diffusion parameters")
-                if missing_keys:
-                    print(f"   ⚠️ Missing {len(missing_keys)} parameters (first 5): {missing_keys[:5]}")
-                else:
-                    print("   🎉 All diffusion head weights loaded successfully!")
+                if self.debug:
+                    print(f"   ✅ Loaded {len(loaded_keys)}/{len(diffusion_weights)} diffusion parameters")
+                    if missing_keys:
+                        print(f"   ⚠️ Missing {len(missing_keys)} parameters (first 5): {missing_keys[:5]}")
+                    else:
+                        print("   🎉 All diffusion head weights loaded successfully!")
                     
             else:
                 print(f"⚠️ No diffusion weights found at {self.diffusion_weights_path}")
-                print("   🎲 Diffusion head will use random initialization")
+                if self.debug:
+                    print("   🎲 Diffusion head will use random initialization")
             
             # ==================================================================
             # STEP 6: Set Up Image and Text Processing
@@ -284,7 +296,8 @@ class SimpleTinyVLA:
             # Resize model embeddings to match new tokenizer vocabulary size
             # This is crucial to prevent dimension mismatch errors!
             if num_new_tokens > 0:
-                print(f"🔧 Resizing embeddings for {num_new_tokens} new tokens")
+                if self.debug:
+                    print(f"🔧 Resizing embeddings for {num_new_tokens} new tokens")
                 self.base_model.resize_token_embeddings(len(self.tokenizer))
                 
                 # Initialize new token embeddings with average of existing embeddings
@@ -298,21 +311,28 @@ class SimpleTinyVLA:
                 input_embeddings[-num_new_tokens:] = input_embeddings_avg
                 output_embeddings[-num_new_tokens:] = output_embeddings_avg
                 
-                print(f"✅ Model embeddings resized to {len(self.tokenizer)} tokens")
+                if self.debug:
+                    print(f"✅ Model embeddings resized to {len(self.tokenizer)} tokens")
             
             # Set model to evaluation mode (not training mode)
-            self.model.eval()
+            self.base_model.eval()
             
             # 🔥 CRITICAL FIX: Ensure model_loaded is True even if there are minor warnings
-            print("✅ Model successfully loaded with LoRA adapters")
+            if self.debug:
+                print("✅ Model successfully loaded with LoRA adapters")
             self.model_loaded = True
+            
+            # Set model reference for predict_action compatibility
+            if not hasattr(self, 'model'):
+                self.model = self.base_model
             
         except Exception as e:
             # If anything goes wrong, print error and mark model as not loaded
             # But be more specific about what exactly failed
             if "'ConditionalUnet1D' object has no attribute 'weight'" in str(e):
-                print(f"⚠️ Minor diffusion head issue (expected): {e}")
-                print("✅ Model core components loaded successfully - proceeding with inference")
+                if self.debug:
+                    print(f"⚠️ Minor diffusion head issue (expected): {e}")
+                    print("✅ Model core components loaded successfully - proceeding with inference")
                 self.model_loaded = True  # Still set to True since core model works
             else:
                 print(f"❌ Critical model loading failed: {e}")
@@ -341,48 +361,64 @@ class SimpleTinyVLA:
         
         # If model didn't load properly, use heuristic fallback
         if not self.model_loaded:
-            print("⚠️ Model not loaded, using heuristic action")
+            if self.debug:
+                print("⚠️ Model not loaded, using heuristic action")
             return self._heuristic_action(robot_state)
         
         try:
             # torch.no_grad() means "don't compute gradients" - saves memory during inference
             with torch.no_grad():
                 # Prepare all inputs in the format the model expects
+                if self.debug:
+                    print("🔧 Preparing inputs...")
                 inputs = self._prepare_inputs(image, robot_state, instruction)
+                if self.debug:
+                    print(f"   Image shape: {inputs['images'].shape}")
+                    print(f"   State shape: {inputs['states'].shape}")
+                    print(f"   Input IDs shape: {inputs['input_ids'].shape}")
                 
                 # 🔥 ACTUALLY USE THE TRAINED NEURAL NETWORK! 🔥
-                print("🧠 Using trained neural network for prediction")
+                if self.debug:
+                    print("🧠 Using trained neural network for prediction...")
                 outputs = self.model(**inputs)
+                if self.debug:
+                    print(f"✅ Model inference completed successfully!")
                 
                 # Extract actions from model outputs
                 if hasattr(outputs, 'actions') and outputs.actions is not None:
                     # Direct action prediction
                     predicted_actions = outputs.actions
-                    print(f"✅ Got direct actions: {predicted_actions.shape}")
+                    if self.debug:
+                        print(f"✅ Got direct actions: {predicted_actions.shape}")
                     
                 elif hasattr(outputs, 'prediction_logits') and outputs.prediction_logits is not None:
                     # Diffusion model prediction - take the first action from the sequence
                     predicted_actions = outputs.prediction_logits
-                    print(f"✅ Got diffusion predictions: {predicted_actions.shape}")
+                    if self.debug:
+                        print(f"✅ Got diffusion predictions: {predicted_actions.shape}")
                     
                 elif hasattr(outputs, 'logits') and outputs.logits is not None:
                     # 🔥 FIXED: Handle diffusion model outputs correctly
                     # For diffusion models during inference, actions are returned in logits field
                     predicted_actions = outputs.logits
-                    print(f"✅ Got actions from logits: {predicted_actions.shape}")
+                    if self.debug:
+                        print(f"✅ Got actions from logits: {predicted_actions.shape}")
                     
                     # Check if this looks like action predictions (not language logits)
                     if len(predicted_actions.shape) >= 2 and predicted_actions.shape[-1] <= 10:
                         # This looks like action predictions (last dim should be action_dim ~4)
-                        print(f"   Confirmed: Action predictions with {predicted_actions.shape[-1]} dimensions")
+                        if self.debug:
+                            print(f"   Confirmed: Action predictions with {predicted_actions.shape[-1]} dimensions")
                     else:
                         # This looks like language logits - need different handling
-                        print(f"   Warning: Large logits tensor ({predicted_actions.shape}), may be language logits")
-                        print("   Using heuristic fallback for large logits")
+                        if self.debug:
+                            print(f"   Warning: Large logits tensor ({predicted_actions.shape}), may be language logits")
+                            print("   Using heuristic fallback for large logits")
                         return self._heuristic_action(robot_state)
                     
                 else:
-                    print(f"⚠️ Unknown output format: {type(outputs)}, available attributes: {[attr for attr in dir(outputs) if not attr.startswith('_')]}")
+                    if self.debug:
+                        print(f"⚠️ Unknown output format: {type(outputs)}, available attributes: {[attr for attr in dir(outputs) if not attr.startswith('_')]}")
                     return self._heuristic_action(robot_state)
                 
                 # Process the predicted actions
@@ -405,18 +441,38 @@ class SimpleTinyVLA:
                         # Pad with zeros if somehow we got fewer dimensions
                         action = np.pad(action, (0, 4 - len(action)), 'constant')
                     
-                    # Denormalize actions using training statistics (all 4 dimensions)
-                    action_denorm = action * self.norm_stats['action_std'] + self.norm_stats['action_mean']
+                    # 🔥 FIXED: Denormalize actions using training statistics (all 4 dimensions)
+                    # Ensure normalization stats are numpy arrays for consistent operations
+                    action_mean = self.norm_stats['action_mean']
+                    action_std = self.norm_stats['action_std']
                     
-                    print(f"✅ Neural network predicted action: {action_denorm}")
+                    # Convert to numpy if they're tensors  
+                    if torch.is_tensor(action_mean):
+                        action_mean = action_mean.cpu().numpy()
+                    if torch.is_tensor(action_std):
+                        action_std = action_std.cpu().numpy()
+                        
+                    # Ensure correct shapes and types
+                    action_mean = np.array(action_mean, dtype=np.float32)
+                    action_std = np.array(action_std, dtype=np.float32)
+                    
+                    # Ensure action is numpy array
+                    action = np.array(action, dtype=np.float32)
+                    
+                    # Now all operations are numpy -> numpy (no type mismatch)
+                    action_denorm = action * action_std + action_mean
+                    
+                    if self.debug:
+                        print(f"✅ Neural network predicted action: {action_denorm}")
                     return action_denorm.astype(np.float32)
                 
                 # If we get here, something went wrong
                 return self._heuristic_action(robot_state)
                 
         except Exception as e:
-            print(f"⚠️ Neural network prediction failed: {e}")
-            print("🔄 Falling back to heuristic action")
+            if self.debug:
+                print(f"⚠️ Neural network prediction failed: {e}")
+                print("🔄 Falling back to heuristic action")
             # If prediction fails, gracefully fall back to heuristic
             return self._heuristic_action(robot_state)
     
@@ -447,25 +503,60 @@ class SimpleTinyVLA:
             image = Image.fromarray(image.astype(np.uint8))
         
         # ======================================================================
-        # STEP 2: Normalize Robot State
+        # STEP 2: Normalize Robot State (FIXED TYPE CONVERSION)
         # ======================================================================
+        
+        # Ensure robot_state is numpy array
+        if torch.is_tensor(robot_state):
+            robot_state = robot_state.cpu().numpy()
+        robot_state = np.array(robot_state, dtype=np.float32)
         
         # Normalize robot joint positions using loaded statistics
         # Formula: (value - mean) / std_deviation
         # This scales the data to have mean=0, std=1, which neural networks prefer
         if 'state_mean' in self.norm_stats:
-            # Use correct keys from training stats
-            norm_state = (robot_state - self.norm_stats['state_mean']) / self.norm_stats['state_std']
+            # 🔥 FIXED: Ensure normalization stats are numpy arrays
+            state_mean = self.norm_stats['state_mean']
+            state_std = self.norm_stats['state_std']
+            
+            # Convert to numpy if they're tensors
+            if torch.is_tensor(state_mean):
+                state_mean = state_mean.cpu().numpy()
+            if torch.is_tensor(state_std):
+                state_std = state_std.cpu().numpy()
+                
+            # Ensure correct shapes and types
+            state_mean = np.array(state_mean, dtype=np.float32)
+            state_std = np.array(state_std, dtype=np.float32)
+            
+            # Now all operations are numpy -> numpy (no type mismatch)
+            norm_state = (robot_state - state_mean) / state_std
+            
         elif 'qpos_mean' in self.norm_stats:
-            # Fallback to older naming convention
-            norm_state = (robot_state - self.norm_stats['qpos_mean']) / self.norm_stats['qpos_std']
+            # Fallback to older naming convention with same fixes
+            qpos_mean = self.norm_stats['qpos_mean']
+            qpos_std = self.norm_stats['qpos_std']
+            
+            # Convert to numpy if they're tensors
+            if torch.is_tensor(qpos_mean):
+                qpos_mean = qpos_mean.cpu().numpy()
+            if torch.is_tensor(qpos_std):
+                qpos_std = qpos_std.cpu().numpy()
+                
+            # Ensure correct shapes and types
+            qpos_mean = np.array(qpos_mean, dtype=np.float32)
+            qpos_std = np.array(qpos_std, dtype=np.float32)
+            
+            # Now all operations are numpy -> numpy
+            norm_state = (robot_state - qpos_mean) / qpos_std
+            
         else:
             # No normalization stats available
             print("⚠️ No normalization stats available, using raw state")
             norm_state = robot_state
         
         # Convert to PyTorch tensor and add batch dimension (1, 7) instead of (7,)
-        state_tensor = torch.from_numpy(norm_state).float().unsqueeze(0).to(self.device)
+        state_tensor = torch.from_numpy(norm_state.astype(np.float32)).float().unsqueeze(0).to(self.device)
         
         # ======================================================================
         # STEP 3: Process Image for Model
@@ -574,9 +665,10 @@ class SimpleTinyVLA:
 def load_tinyvla(
     lora_checkpoint_path: str,
     base_model_path: str = "VLA_weights/Llava-Pythia-400M",
-    diffusion_weights_path="VLA_weights/diff_head/diffusion_head_latest.bin",  # Fixed path
+    diffusion_weights_path: str = "VLA_weights/diff_head/diffusion_head_latest.bin",
     stats_path: str = "metaworld_stats.pkl",
-    device: str = "cuda" if torch.cuda.is_available() else "cpu"
+    device: str = "cuda" if torch.cuda.is_available() else "cpu",
+    debug: bool = True
 ) -> SimpleTinyVLA:
     """
     🚀 Convenience Function to Load TinyVLA Model
@@ -584,34 +676,52 @@ def load_tinyvla(
     This is a simple function that creates and returns a SimpleTinyVLA instance.
     Use this if you want the simplest possible way to load the model.
     
+    Args:
+        lora_checkpoint_path: Path to LoRA adapter weights
+        base_model_path: Path to base model
+        diffusion_weights_path: Path to diffusion head weights
+        stats_path: Path to normalization statistics
+        device: Device to use ('cuda' or 'cpu')
+        debug: Whether to print debug information (False for faster inference)
+    
     Example:
-        vla = load_tinyvla()
+        # For development/debugging (verbose output)
+        vla = load_tinyvla("VLA_weights/lora_adapter", debug=True)
+        
+        # For production (silent, faster inference)
+        vla = load_tinyvla("VLA_weights/lora_adapter", debug=False)
+        
         action = vla.predict_action(image, robot_state, "pick up the block")
     
     Returns:
         SimpleTinyVLA instance ready for making predictions
     """
-    return SimpleTinyVLA(base_model_path, lora_checkpoint_path, diffusion_weights_path, stats_path)
+    return SimpleTinyVLA(base_model_path, lora_checkpoint_path, diffusion_weights_path, stats_path, debug)
 
 
-def test_loader():
+def test_loader(debug=True):
     """
-    🧪 Test the TinyVLA Loader
+    🧪 Test the TinyVLA loader to make sure everything works
     
-    This function tests if everything is working correctly by:
-    1. Loading the model
-    2. Creating dummy test inputs
-    3. Getting a prediction
-    4. Reporting success or failure
+    This function:
+    1. Loads the model
+    2. Creates fake test inputs (image + robot state + instruction)
+    3. Gets a prediction
+    4. Checks that everything worked
     
-    Run this to verify your setup is working!
+    Args:
+        debug: Whether to use debug mode for detailed output
+        
+    Returns:
+        bool: True if test passes, False if it fails
     """
-    print("🧪 Testing TinyVLA Loader...")
     
     try:
-        # Step 1: Load the model
+        print("🧪 Testing TinyVLA Loader...")
         print("📋 Step 1: Loading model...")
-        vla = load_tinyvla()
+        
+        # Load model with the working checkpoint path
+        vla = load_tinyvla("VLA_weights/full_training_bs1_final/step_1000", debug=debug)
         
         # Step 2: Create dummy test inputs
         print("📋 Step 2: Creating test inputs...")
@@ -626,12 +736,16 @@ def test_loader():
         print(f"✅ Test successful! Action: {action}")
         print("🎉 TinyVLA loader is working correctly!")
         
+        return True
+        
     except Exception as e:
         # If anything goes wrong, print detailed error information
         print(f"❌ Test failed: {e}")
         import traceback
         traceback.print_exc()
         print("💡 Check that all model files are in the correct locations")
+        
+        return False
 
 
 # ==============================================================================

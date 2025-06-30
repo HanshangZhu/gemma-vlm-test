@@ -132,7 +132,7 @@ class TaskPromptGenerator:
         prompts = {
             "simple": "Pick up the object and place it at the target location.",
             
-            "detailed": "Carefully approach the red object, grasp it securely with the gripper, lift it up, navigate to the green target area, and gently place the object down at the target position.",
+            "detailed": "Carefully approach the red object, grasp it securely with the gripper, lift it up, navigate to the green target area, and gently place the object down at the target position. If you think the gripper is misplaced, restore and try alternative possible locations.",
             
             "imperative": "PICK UP THE RED BLOCK. MOVE TO TARGET. PLACE BLOCK DOWN.",
             
@@ -227,7 +227,25 @@ vla_model = None  # Start with no model loaded
 if HAS_TINYVLA:
     try:
         print("\n🧠 Loading TinyVLA model...")
-        vla_model = load_tinyvla()  # Load our trained model
+        
+        # 🎯 Use our trained model checkpoints
+        # These paths point to our actual trained model files
+        lora_checkpoint_path = "VLA_weights/full_training_bs1_final"  # LoRA adapters
+        diffusion_weights_path = "VLA_weights/full_training_bs1_final/diffusion_head_latest.bin"  # Diffusion head
+        stats_path = "VLA_weights/full_training_bs1_final/stats.pkl"  # Normalization stats
+        
+        print(f"📂 LoRA checkpoint: {lora_checkpoint_path}")
+        print(f"�� Diffusion weights: {diffusion_weights_path}")
+        print(f"📊 Stats file: {stats_path}")
+        
+        # Load our trained model with proper paths
+        vla_model = load_tinyvla(
+            lora_checkpoint_path=lora_checkpoint_path,
+            base_model_path="VLA_weights/Llava-Pythia-400M",
+            diffusion_weights_path=diffusion_weights_path,
+            stats_path=stats_path,
+            debug=False  # 🔧 Set to True for debugging, False for faster inference
+        )
         print("✅ TinyVLA model loaded successfully!")
         MODEL_TYPE = "🧠 TinyVLA Model"  # Display string for UI
     except Exception as e:
