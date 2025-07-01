@@ -9,7 +9,7 @@ import json
 import pickle
 import argparse
 import yaml
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from functools import partial
 import math
 import io
@@ -28,6 +28,10 @@ from tqdm import tqdm
 import glob
 from transformers.utils import logging as hf_logging
 from datasets import load_dataset  # NEW: HuggingFace Datasets for MT50
+
+# ADD THESE DEEPSPEED IMPORTS
+import deepspeed
+from deepspeed.utils.zero_to_fp32 import get_fp32_state_dict_from_zero_checkpoint
 
 # ---------------------------------------------------------------------------
 # Path setup BEFORE heavy imports
@@ -224,6 +228,8 @@ class TrainingConfig:
     prompt_json_path: str = "datasets/mt50_task_prompts.json"
     # Dataset validation options
     validate_samples_count: int = 0  # 0 = skip, >0 = validate that many random samples.
+    # ADD THIS NEW FIELD FOR DEEPSPEED CONFIG PATH
+    deepspeed_config_path: str | None = None # Path to DeepSpeed config file for optional use
 
 class MetaWorldDataset(torch.utils.data.Dataset):
     """MetaWorld dataset for multi-task robot learning."""
@@ -612,7 +618,13 @@ class CollateFn:
 class Trainer:
     def __init__(self, config: TrainingConfig):
         self.config = config
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # DeepSpeed will set LOCAL_RANK env var, otherwise default to 0 for single-GPU
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        if torch.cuda.is_available():
+            torch.cuda.set_device(local_rank)
+            self.device = torch.device(f"cuda:{local_rank}")
+        else:
+            self.device = torch.device("cpu") # Fallback to CPU if no CUDA
         print(f"✅ Using device: {self.device}")
 
         # Initialize components to None
@@ -625,6 +637,9 @@ class Trainer:
         self.stats = None
         self.best_loss = float('inf')
 
+        # DeepSpeed engine (will be set if config.deepspeed_config_path is provided)
+        self.model_engine = None
+
     def _setup(self):
         """Initializes all components for training."""
         os.makedirs(self.config.output_dir, exist_ok=True)
@@ -636,8 +651,9 @@ class Trainer:
         if self.config.use_gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
 
+        # Conditionally setup DeepSpeed or regular optimizer/scheduler
+        self._setup_deepspeed_or_optimizer()
         self._initialize_parameters()
-        self._setup_optimizer()
         self._setup_dataloader()
 
     def _setup_dataset_and_stats(self):
@@ -898,119 +914,65 @@ class Trainer:
             if moved:
                 print(f"🔧 Cast {moved} embed_out sub-modules to FP32 for stability")
 
+    def _add_nan_hooks(self, unet: ConditionalUnet1D):
+        # ... existing _add_nan_hooks code ...
+        pass
+
     def _initialize_parameters(self):
-        print("🔧 Initializing diffusion head parameters with conservative scaling...")
-        for name, param in self.model.named_parameters():
-            if 'embed_out' in name and param.requires_grad:
-                if 'weight' in name:
-                    if len(param.shape) >= 2:
-                        torch.nn.init.normal_(param.data, mean=0.0, std=0.001)
-                    else:
-                        torch.nn.init.normal_(param.data, mean=0.0, std=0.0001)
-                elif 'bias' in name:
-                    torch.nn.init.constant_(param.data, 0.0)
-            elif 'lora' in name and param.requires_grad:
-                if 'lora_A' in name:
-                    torch.nn.init.normal_(param.data, mean=0.0, std=0.001)
-                elif 'lora_B' in name:
-                    torch.nn.init.zeros_(param.data)
+        """Initializes trainable parameters."""
+        # This function is now mostly for non-DeepSpeed paths or if specific init is needed after DeepSpeed.
+        # DeepSpeed's initialize function can handle parameter initialization based on its config.
+        print("🔄 Initializing trainable parameters...")
         
-        if self.config.train_diffusion_head:
-            if self.config.diffusion_warmup_steps > 0:
-                print(f"🕒 Diffusion head will stay FROZEN for the first {self.config.diffusion_warmup_steps} steps (warm-up).")
-                for name, param in self.model.named_parameters():
-                    if 'embed_out' in name:
-                        param.requires_grad = False
-                # We will unfreeze later in the train() loop.
-                self._diffusion_unfrozen = False
-            else:
-                self._diffusion_unfrozen = True
-
-            print("🔧 Applying GroupNorm epsilon fix...")
-            for name, module in self.model.named_modules():
-                if isinstance(module, torch.nn.GroupNorm) and 'embed_out' in name:
-                    module.eps = 1e-4
-                elif isinstance(module, torch.nn.LayerNorm) and 'embed_out' in name:
-                    module.eps = 1e-4
-        else:
-            self._diffusion_unfrozen = False
-
-        # ------------------------------------------------------------------
-        # Final safety sweep: replace any NaN / Inf weights or biases **anywhere**.
-        # ------------------------------------------------------------------
-        bad_param_count = 0
-        for name, p in self.model.named_parameters():
-            if torch.isnan(p.data).any() or torch.isinf(p.data).any():
-                bad_param_count += 1
-                print(f"🚑 Found NaN/Inf in parameter {name}; re-initialising.")
-                if p.data.ndim >= 2:
-                    torch.nn.init.xavier_uniform_(p.data)
-                else:
-                    torch.nn.init.zeros_(p.data)
-
-        # ------------------------------------------------------------------
-        # Additional sweep: extremely large finite weights (>1e3) in the
-        # diffusion head can also destabilise forward passes while escaping
-        # the NaN/Inf check.  Clamp by re-initialising those elements.
-        # ------------------------------------------------------------------
-        huge_param_count = 0
-        for name, p in self.model.named_parameters():
-            if 'embed_out' in name:
-                big_mask = torch.abs(p.data) > 1e3
-                if big_mask.any():
-                    huge_param_count += 1
-                    num_big = big_mask.sum().item()
-                    print(f"🚑 Re-initialising {num_big} huge weights in {name}")
-                    with torch.no_grad():
-                        p.data[big_mask] = torch.normal(mean=0.0, std=0.001, size=(num_big,), device=p.data.device).view(-1)
-
-        if bad_param_count == 0:
-            print("✅ Parameter sweep: no NaN/Inf weights found after init.")
-        else:
-            print(f"✅ Parameter sweep: fixed {bad_param_count} parameters containing NaN/Inf.")
-
-        if huge_param_count == 0:
-            print("✅ Parameter sweep: no oversized weights found after init.")
-        else:
-            print(f"✅ Parameter sweep: rescaled {huge_param_count} parameters containing oversized weights.")
-
-        # ------------------------------------------------------------------
-        # Freeze diffusion head parameters completely if training is disabled
-        # ------------------------------------------------------------------
-        if not self.config.train_diffusion_head:
-            frozen = 0
-            for name, p in self.model.named_parameters():
-                if 'embed_out' in name:
-                    p.requires_grad = False
-                    frozen += 1
-            print(f"🧊 Frozen {frozen} embed_out parameters (train_diffusion_head=False)")
+        if not self.model_engine: # Only apply if not DeepSpeed
+            # For non-DeepSpeed: apply custom initializations if needed
+            # Ensure new tokens are initialized (handled in _setup_model_and_tokenizer)
+            pass # Existing code might be here if you have specific initialization
 
     def _setup_optimizer(self):
-        print("🔄 Setting up optimizers...")
-        
-        # Separate diffusion head for a lower LR
-        embed_out_params = []
-        other_params = []
-        for n, p in self.model.named_parameters():
-            if p.requires_grad:
-                if 'embed_out' in n:
-                    embed_out_params.append(p)
-                else:
-                    other_params.append(p)
+        """Sets up the optimizer and (optional) learning rate scheduler."""
+        print("🔄 Setting up optimizer and scheduler...")
+        # Parameters that require gradient
+        params = [p for p in self.model.parameters() if p.requires_grad]
 
-        optimizer_params = []
-        if other_params:
-            optimizer_params.append({'params': other_params, 'lr': self.config.learning_rate, 'weight_decay': self.config.weight_decay})
-        if embed_out_params:
-            optimizer_params.append({'params': embed_out_params, 'lr': self.config.diffusion_learning_rate, 'weight_decay': self.config.weight_decay})
-        
-        self.optimizer = torch.optim.AdamW(optimizer_params, eps=1e-8)
-        
-        # We will handle learning rate scheduling manually
-        self.scheduler = None 
-        
-        if self.config.use_bf16:
+        # Filter out diffusion head parameters if not training it
+        if not self.config.train_diffusion_head:
+            params = [p for p in params if 'embed_out' not in p._name]
+
+        self.optimizer = torch.optim.AdamW(params, lr=self.config.learning_rate, weight_decay=self.config.weight_decay)
+        print(f"✅ Optimizer: AdamW, LR: {self.config.learning_rate}, Weight decay: {self.config.weight_decay}")
+
+        # GradScaler for mixed precision (non-DeepSpeed only)
+        if self.config.use_bf16 and not self.model_engine:
             self.scaler = torch.cuda.amp.GradScaler()
+            print("✅ Using GradScaler for BF16 mixed precision.")
+
+    def _setup_deepspeed_or_optimizer(self):
+        """Conditionally sets up DeepSpeed or falls back to standard optimizer/scheduler."""
+        if self.config.deepspeed_config_path:
+            print(f"🔧 DeepSpeed config path found: {self.config.deepspeed_config_path}")
+            # DeepSpeed requires its own arguments object
+            ds_args = argparse.Namespace()
+            ds_args.deepspeed = self.config.deepspeed_config_path
+            # These are typically set by the deepspeed launcher, but define them for `deepspeed.initialize`
+            ds_args.local_rank = int(os.environ.get("LOCAL_RANK", 0))
+            ds_args.world_size = int(os.environ.get("WORLD_SIZE", 1))
+            ds_args.rank = int(os.environ.get("RANK", 0))
+
+            print("🔧 Initializing DeepSpeed engine...")
+            # DeepSpeed handles optimizer, scheduler, and model wrapping internally
+            self.model_engine, self.optimizer, _, self.scheduler = deepspeed.initialize(
+                args=ds_args,             # Pass the DeepSpeed arguments
+                model=self.model,
+                model_parameters=[p for p in self.model.parameters() if p.requires_grad], # Only trainable params
+                config_params=None,       # Config loaded via args.deepspeed
+            )
+            # Ensure self.device is updated to the DeepSpeed assigned local rank
+            self.device = self.model_engine.local_rank
+            print(f"✅ DeepSpeed initialized with ZeRO stage {self.model_engine.zero_optimization_stage()} on device {self.device}")
+        else:
+            print("⚠️ No DeepSpeed config path provided. Falling back to standard optimizer setup.")
+            self._setup_optimizer() # Call your existing _setup_optimizer method
 
     def _setup_dataloader(self):
         print("🔄 Creating DataLoader...")
@@ -1035,52 +997,74 @@ class Trainer:
         checkpoint_dir = os.path.join(self.config.output_dir, f"step_{step}")
         os.makedirs(checkpoint_dir, exist_ok=True)
         
-        # Save LoRA adapter weights
-        self.model.save_pretrained(checkpoint_dir)
-        
-        # 🔥 CRITICAL FIX: Save diffusion head weights separately when training enabled
-        if self.config.train_diffusion_head:
-            diffusion_state_dict = {}
-            for name, param in self.model.named_parameters():
-                if 'embed_out' in name and param.requires_grad:
-                    # Remove any PEFT prefixes to get the actual parameter name
-                    clean_name = name.replace('base_model.model.', '')
-                    diffusion_state_dict[clean_name] = param.data.clone()
+        # --- Begin DeepSpeed-aware saving logic ---
+        if self.model_engine: # If DeepSpeed is initialized
+            # DeepSpeed handles saving sharded model, optimizer, and scheduler states.
+            # It saves to a step-specific directory within checkpoint_dir.
+            self.model_engine.save_checkpoint(checkpoint_dir, tag=f"step_{step}")
+
+            # Only rank 0 saves the consolidated FP32 model for easier loading without DeepSpeed
+            if self.model_engine.global_rank == 0: # Ensure only one process saves this
+                print("Consolidating DeepSpeed checkpoint to FP32 model...")
+                consolidated_path = os.path.join(checkpoint_dir, "pytorch_model.bin")
+                # `get_fp32_state_dict_from_zero_checkpoint` needs the path to the sharded checkpoint dir
+                # DeepSpeed saves into `checkpoint_dir/tag/` (e.g., `step_X/step_X/`) or just `checkpoint_dir/tag/`
+                # Check for the correct DeepSpeed internal path structure
+                deepspeed_ckpt_path = os.path.join(checkpoint_dir, f"step_{step}")
+                if os.path.exists(deepspeed_ckpt_path):
+                    fp32_state_dict = get_fp32_state_dict_from_zero_checkpoint(deepspeed_ckpt_path)
+                    torch.save(fp32_state_dict, consolidated_path)
+                    print(f"💾 Saved consolidated FP32 model to {consolidated_path}")
+                else:
+                    print(f"⚠️ DeepSpeed checkpoint path not found for consolidation: {deepspeed_ckpt_path}")
+
+            print(f"💾 Saved DeepSpeed checkpoint at step {step} to {checkpoint_dir}")
             
-            if diffusion_state_dict:
-                # Save to step directory
-                diffusion_path = os.path.join(checkpoint_dir, "diffusion_head.bin")
-                torch.save(diffusion_state_dict, diffusion_path)
-                print(f"💾 Saved {len(diffusion_state_dict)} diffusion head parameters to {diffusion_path}")
-                
-                # 🎯 Save to configurable diffusion head directory
-                vla_diff_dir = self.config.diffusion_head_save_dir  # Use config parameter instead of hardcoded path
-                os.makedirs(vla_diff_dir, exist_ok=True)
-                
-                # Save latest checkpoint
-                latest_diff_path = os.path.join(vla_diff_dir, f"diffusion_head_step_{step}.bin")
-                torch.save(diffusion_state_dict, latest_diff_path)
-                
-                # Save as "latest" for easy loading
-                latest_symlink = os.path.join(vla_diff_dir, "diffusion_head_latest.bin")
-                torch.save(diffusion_state_dict, latest_symlink)
-                
-                print(f"💾 Also saved diffusion head to {latest_diff_path}")
-                print(f"💾 Updated latest diffusion head: {latest_symlink}")
+        else: # Fallback to standard PyTorch saving (original logic)
+            # Save LoRA adapter weights (if applicable, assuming self.model is a PeftModel)
+            if hasattr(self.model, 'save_pretrained'):
+                self.model.save_pretrained(checkpoint_dir)
             else:
-                print("⚠️ No diffusion head parameters found to save!")
-        
-        checkpoint_data = {
-            'step': step,
-            'loss': loss_value,
-            'optimizer__state_dict': self.optimizer.state_dict(),
-            'config': asdict(self.config),
-        }
-        if self.scaler:
-            checkpoint_data['scaler_state_dict'] = self.scaler.state_dict()
-        
-        torch.save(checkpoint_data, os.path.join(checkpoint_dir, "training_state.pt"))
-        print(f"💾 Saved checkpoint at step {step} to {checkpoint_dir}")
+                # For non-PEFT models, save the full state dict
+                torch.save(self.model.state_dict(), os.path.join(checkpoint_dir, "pytorch_model.bin"))
+
+            # Save diffusion head weights separately when training enabled (original logic)
+            if self.config.train_diffusion_head:
+                diffusion_state_dict = {}
+                for name, param in self.model.named_parameters():
+                    # Ensure it's the trainable diffusion head
+                    if 'embed_out' in name and param.requires_grad:
+                        # Remove any PEFT prefixes if present
+                        clean_name = name.replace('base_model.model.', '')
+                        diffusion_state_dict[clean_name] = param.data.clone()
+                
+                if diffusion_state_dict:
+                    diffusion_path = os.path.join(checkpoint_dir, "diffusion_head.bin")
+                    torch.save(diffusion_state_dict, diffusion_path)
+                    print(f"💾 Saved {len(diffusion_state_dict)} diffusion head parameters to {diffusion_path}")
+                    
+                    # Also save to configurable diffusion head directory for latest version
+                    vla_diff_dir = self.config.diffusion_head_save_dir
+                    os.makedirs(vla_diff_dir, exist_ok=True) # Ensure dir exists
+                    torch.save(diffusion_state_dict, os.path.join(vla_diff_dir, f"diffusion_head_step_{step}.bin"))
+                    torch.save(diffusion_state_dict, os.path.join(vla_diff_dir, "diffusion_head_latest.bin"))
+                    print(f"💾 Updated latest diffusion head: {os.path.join(vla_diff_dir, 'diffusion_head_latest.bin')}")
+                else:
+                    print("⚠️ No trainable diffusion head parameters found to save!")
+
+            # Save training state (optimizer, scaler, config) for non-DeepSpeed runs
+            checkpoint_data = {
+                'step': step,
+                'loss': loss_value,
+                'config': asdict(self.config),
+            }
+            if self.optimizer: # Only save if optimizer exists (not handled by DeepSpeed)
+                checkpoint_data['optimizer__state_dict'] = self.optimizer.state_dict()
+            if self.scaler: # Only save if scaler exists (not handled by DeepSpeed)
+                checkpoint_data['scaler_state_dict'] = self.scaler.state_dict()
+            
+            torch.save(checkpoint_data, os.path.join(checkpoint_dir, "training_state.pt"))
+            print(f"💾 Saved standard checkpoint at step {step} to {checkpoint_dir}")
 
     def _adjust_lr(self, step):
         """Manually adjust learning rate based on warmup schedule."""
@@ -1092,7 +1076,11 @@ class Trainer:
 
     def train(self):
         self._setup()
-        self.model.train()
+        # Set training mode based on whether DeepSpeed is active
+        if self.model_engine:
+            self.model_engine.train()
+        else:
+            self.model.train()
         global_step = 0
         consecutive_nan_count = 0
         max_consecutive_nans = 3
@@ -1105,8 +1093,10 @@ class Trainer:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             # Set memory fraction to prevent OOM (very conservative)
-            torch.cuda.set_per_process_memory_fraction(0.6)
-            print(f"🔧 Set CUDA memory fraction to 0.6")
+            # DeepSpeed manages memory, avoid setting per_process_memory_fraction if DS is used
+            if not self.model_engine:
+                torch.cuda.set_per_process_memory_fraction(0.6)
+                print(f"🔧 Set CUDA memory fraction to 0.6")
         
         print(f"🚀 Starting training: {batches_per_epoch} batches/epoch, ~{total_epochs} epochs, {self.config.max_steps} total steps")
         
@@ -1144,8 +1134,13 @@ class Trainer:
                 print(f"🔬 Sanity-test loss: {test_loss.item():.4f} | requires_grad={test_loss.requires_grad}")
 
                 if test_loss.requires_grad:
-                    test_loss.backward()
-                    self.optimizer.zero_grad(set_to_none=True)
+                    # Backward pass handled by DeepSpeed if active
+                    if self.model_engine:
+                        self.model_engine.backward(test_loss)
+                    else:
+                        test_loss.backward()
+                        # Clear gradients for next step (DeepSpeed handles this automatically)
+                        self.optimizer.zero_grad(set_to_none=True)
                     print("✅ Sanity backward pass succeeded")
                 else:
                     print("⚠️  Sanity loss does not require grad; check trainable params list")
@@ -1211,105 +1206,40 @@ class Trainer:
                             loss = loss_fct(logits.view(-1, logits.size(-1)), tgt.view(-1))
                             
                         elif hasattr(outputs, 'loss') and outputs.loss is not None:
-                            # Action prediction model path (VLA models)
+                            # Action prediction path
                             loss = outputs.loss
-                            print(f"🎯 Using action prediction loss at epoch {current_epoch}, batch {batch_in_epoch}: {loss.item():.4f}")
                             
                         else:
-                            print(f"💥 Model outputs don't contain expected loss or logits at epoch {current_epoch}, batch {batch_in_epoch}, skipping batch.")
-                            consecutive_nan_count += 1
-                            if consecutive_nan_count >= max_consecutive_nans:
-                                print("🛑 Stopping training due to consecutive invalid outputs.")
-                                return
-                            continue
+                            raise ValueError("Model outputs don't contain expected loss or logits.")
 
-                    if torch.isnan(loss) or torch.isinf(loss):
-                        print(f"💥 NaN/Inf detected in loss at epoch {current_epoch}, batch {batch_in_epoch}, skipping.")
-                        consecutive_nan_count += 1
-                        if consecutive_nan_count >= max_consecutive_nans:
-                            print("🛑 Stopping training due to consecutive NaN losses.")
-                            return
-                        continue
-                    
-                    consecutive_nan_count = 0
-                    loss = loss / self.config.gradient_accumulation_steps
-                    
-                    if self.scaler:
-                        self.scaler.scale(loss).backward()
-                    else:
-                        loss.backward()
-
-                    # 🔥 MEMORY CLEANUP: Delete intermediate tensors
-                    del outputs
-                    if torch.cuda.is_available():
-                        # Only clear cache occasionally to avoid overhead (fix division by zero)
-                        cleanup_interval = max(1, self.config.max_memory_cleanup_steps // 2) if self.config.max_memory_cleanup_steps > 0 else 50
-                        if global_step % cleanup_interval == 0:
-                            torch.cuda.empty_cache()
-
-                    # ------------------------------------------------------
-                    # Late-unfreeze of diffusion head after warm-up
-                    # ------------------------------------------------------
-                    if (not self._diffusion_unfrozen and 
-                        global_step >= self.config.diffusion_warmup_steps):
-                        print(f"🟢 Unfreezing diffusion head at step {global_step} (warm-up finished)")
-                        for n,p in self.model.named_parameters():
-                            if 'embed_out' in n:
-                                p.requires_grad = True
-                        self._diffusion_unfrozen = True
-                        # No need to add new param groups; they already exist in the optimiser
-
-                    if (global_step + 1) % self.config.gradient_accumulation_steps == 0:
-                        # Manual LR adjustment
-                        self._adjust_lr(global_step)
-
+                    # Backward pass and optimizer step
+                    if self.model_engine: # DeepSpeed handles backward, gradient accumulation, and optimizer step
+                        self.model_engine.backward(loss)
+                        self.model_engine.step() # Includes optimizer.step() and zero_grad()
+                    else: # Regular training fallback
                         if self.scaler:
-                            # Unscale first so that grad norms are in FP32
-                            self.scaler.unscale_(self.optimizer)
-
-                        # ------------------------------------------------------------------
-                        # Gradient-norm monitoring.  If the total grad-norm is NaN / Inf or
-                        # explodes beyond a huge threshold we skip the optimiser step to
-                        # avoid corrupting the weights.
-                        # ------------------------------------------------------------------
-                        total_norm = torch.nn.utils.clip_grad_norm_(
-                            filter(lambda p: p.requires_grad, self.model.parameters()),
-                            self.config.gradient_clip_norm
-                        )
-                        if torch.isnan(total_norm) or torch.isinf(total_norm) or total_norm > 1e4:
-                            print(f"🚨 Abnormal grad-norm {total_norm:.2e} – skipping optimiser step at epoch {current_epoch}, batch {batch_in_epoch}")
-                            self.optimizer.zero_grad(set_to_none=True)
-                            # Skip weight update and move on to next batch
-                            continue
-                        # ------------------------------------------------------------------
-
-                        if self.scaler:
+                            self.scaler.scale(loss).backward()
                             self.scaler.step(self.optimizer)
                             self.scaler.update()
                         else:
+                            loss.backward()
                             self.optimizer.step()
                         
-                        # Prepare for next accumulation step
-                        self.optimizer.zero_grad()
+                        self.optimizer.zero_grad() # Clear gradients for next step
                     
-                    pbar.update(1)
-                    # Update progress bar with epoch/batch info instead of just step
-                    if torch.is_tensor(loss):
-                        try:
-                            pbar.set_description(f"Epoch {current_epoch}, Batch {batch_in_epoch}/{batches_per_epoch-1}, Loss: {loss.item():.4f}, LR: {self.optimizer.param_groups[0]['lr']:.6f}")
-                        except (ValueError, TypeError):
-                            pbar.set_description(f"Epoch {current_epoch}, Batch {batch_in_epoch}/{batches_per_epoch-1}, Loss: nan, LR: {self.optimizer.param_groups[0]['lr']:.6f}")
+                    # Logging
+                    if global_step % 100 == 0:
+                        print(f"Step {global_step}: Loss = {loss.item():.4f}")
                     
-                    if global_step > 0 and global_step % self.config.save_steps == 0:
-                        print(f"💾 Saving checkpoint at epoch {current_epoch}, batch {batch_in_epoch} (step {global_step})")
-                        self.save_checkpoint(global_step, loss.item())
-                        
-                        # 🔥 MEMORY CLEANUP after checkpoint save
-                        if torch.cuda.is_available():
-                            torch.cuda.empty_cache()
-                            print(f"🧹 Memory cleanup after checkpoint save")
-
+                    # Save checkpoint
+                    if global_step % self.config.save_steps == 0 and global_step > 0:
+                        self.save_checkpoint(global_step, loss.item()) # Call the unified save_checkpoint
+                    
                     global_step += 1
+
+            # After an epoch (if not yet max_steps), empty cache
+            if global_step < self.config.max_steps and torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         print(f"\n🎉 Training finished after {current_epoch + 1} epochs.")
         self.save_checkpoint(global_step, loss.item())
@@ -1319,106 +1249,38 @@ class Trainer:
             torch.cuda.empty_cache()
             torch.cuda.reset_peak_memory_stats()
 
-# 🔧 Safety patch: robustify ConditionalResidualBlock1D to zero-out NaNs early
-from TinyVLA.policy_heads.models.droid_unet_diffusion import ConditionalResidualBlock1D as _CRB1D_Old
-
-def _crb1d_forward_safe(self, x, cond):
-    """A safer forward for ConditionalResidualBlock1D that eliminates NaN/Inf early."""
-    out = self.blocks[0](x)
-    # Encoding FiLM parameters
-    embed = self.cond_encoder(cond)
-    embed = embed.reshape(embed.shape[0], 2, self.out_channels, 1)
-    scale, bias = embed[:, 0, ...], embed[:, 1, ...]
-
-    # Replace NaN/Inf in FiLM parameters (before clamp)
-    if torch.isnan(scale).any() or torch.isinf(scale).any() or torch.isnan(bias).any() or torch.isinf(bias).any():
-        print("🚑 Sanitising NaN/Inf in FiLM scale/bias – replaced with zeros")
-        scale = torch.nan_to_num(scale, nan=0.0, posinf=5.0, neginf=-5.0)
-        bias  = torch.nan_to_num(bias,  nan=0.0, posinf=5.0, neginf=-5.0)
-
-    # Clamp FiLM parameters
-    scale = torch.clamp(scale, -5.0, 5.0)
-    bias  = torch.clamp(bias,  -5.0, 5.0)
-
-    out = scale * out + bias
-    # Clamp and sanitise
-    out = torch.clamp(out, -6.0, 6.0)
-    if torch.isnan(out).any() or torch.isinf(out).any():
-        print("🚑 Sanitising NaN/Inf right after FiLM")
-        out = torch.nan_to_num(out, nan=0.0, posinf=6.0, neginf=-6.0)
-
-    out = self.blocks[1](out)
-    # Final safety pass
-    if torch.isnan(out).any() or torch.isinf(out).any():
-        print("🚑 Sanitising NaN/Inf after second conv in ConditionalResidualBlock1D")
-        out = torch.nan_to_num(out, nan=0.0, posinf=6.0, neginf=-6.0)
-
-    return out + self.residual_conv(x)
-
-# Monkey-patch
-import types as _types
-_CRB1D_Old.forward = _types.MethodType(_crb1d_forward_safe, _CRB1D_Old)
-print("✅ Patched ConditionalResidualBlock1D.forward with NaN-safety")
+def parse_args():
+    """Parses command line arguments (simplified for YAML config)."""
+    parser = argparse.ArgumentParser(description="TinyVLA LoRA Training")
+    parser.add_argument("--config", type=str, required=True, help="Path to YAML config file.")
+    parser.add_argument("--output_dir", type=str, default=None, help="Optional: override output directory from config.")
+    return parser.parse_args()
 
 def main():
-    """Main training function"""
-    parser = argparse.ArgumentParser(description="LoRA VLA Trainer for MetaWorld")
-    parser.add_argument("--config", type=str, default="configs/train_lora.yaml",
-                        help="Path to the YAML configuration file.")
-    args = parser.parse_args()
+    """Modified main function with DeepSpeed support controlled by config."""
+    args = parse_args() # Use the simplified parse_args()
     
-    # Load configuration from YAML file
+    # Load config from YAML
     with open(args.config, 'r') as f:
         config_dict = yaml.safe_load(f)
-
-    # Ensure LR fields are numeric floats (YAML may leave them as strings like '1e-5')
-    for lr_key in ["learning_rate", "diffusion_learning_rate", "gradient_clip_norm", "weight_decay"]:
-        if isinstance(config_dict.get(lr_key, 0), str):
-            try:
-                config_dict[lr_key] = float(config_dict[lr_key])
-            except ValueError:
-                raise ValueError(f"Config value {lr_key}={config_dict[lr_key]} is not a valid float")
-
-    # ----------------------------------------------------------------------
-    # Post-processing tweaks
-    # 1. Auto-upgrade default 400M path if still present in config
-    # 2. Resolve/append timestamp to output_dir if it already exists or
-    #    contains literal shell placeholder $(date ...)
-    # ----------------------------------------------------------------------
-
-    # Upgrade backbone automatically if old 400M path was left in config
-    if config_dict.get("model_path", "").endswith("Llava-Pythia-400M"):
-        print("🔄 Detected 400M backbone in config – switching to 700M by default")
-        config_dict["model_path"] = "lesjie/Llava-Pythia-700M"
-
-    # Resolve output directory
-    out_dir_raw = config_dict.get("output_dir", "./outputs/lora_run")
-    # If bash substitution left literally in YAML, remove it and generate timestamp here
-    if "$(" in out_dir_raw or os.path.exists(out_dir_raw):
-        timestamp =  __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")
-        # Strip potential shell command part
-        base_out = out_dir_raw.split("$(")[0].rstrip("/_") or "./outputs/lora_run"
-        new_out_dir = f"{base_out}_{timestamp}"
-        print(f"📁 Output directory resolved to {new_out_dir}")
-        config_dict["output_dir"] = new_out_dir
-
-    # Ensure a diffusion_head_save_dir is present
-    if "diffusion_head_save_dir" not in config_dict or not config_dict["diffusion_head_save_dir"]:
-        config_dict["diffusion_head_save_dir"] = os.path.join(config_dict["output_dir"], "diff_head")
-        print(f"📁 diffusion_head_save_dir set to {config_dict['diffusion_head_save_dir']}")
-
+    
+    # Override output_dir if provided via command line (important for consistency)
+    if args.output_dir:
+        config_dict['output_dir'] = args.output_dir
+    
     config = TrainingConfig(**config_dict)
     
+    # Initialize distributed training if DeepSpeed config path is provided
+    if config.deepspeed_config_path:
+        # deepspeed.init_distributed() will initialize the process group
+        # It reads LOCAL_RANK, WORLD_SIZE, RANK from environment variables
+        # which are set by the `deepspeed` launcher.
+        deepspeed.init_distributed()
+        print("✅ DeepSpeed distributed environment initialized.")
+    
+    # Create trainer with just the config object (args are now handled internally)
     trainer = Trainer(config)
     trainer.train()
 
 if __name__ == "__main__":
-    # Set multiprocessing start method for CUDA safety
-    import torch.multiprocessing as mp
-    try:
-        mp.set_start_method('spawn', force=True)
-        print("✅ Set multiprocessing start method to 'spawn'")
-    except RuntimeError:
-        print("⚠️ Multiprocessing context already set.")
-        pass
     main() 

@@ -18,12 +18,12 @@ lora_alpha: 16
 lora_dropout: 0.05
 
 # Training schedule --------------------------------------------------------
-batch_size: 8                     # PER GPU (fits 40 GB with BF16)
-gradient_accumulation_steps: 2    # → effective batch 32
-learning_rate: 1.0e-6
-diffusion_learning_rate: 5.0e-7
-max_steps: 160000                 # ≈ 3 epochs over 430 k frames @ eff-BS 32
-save_steps: 10000                 # save every ~45 min
+batch_size: 24                   # PER GPU (fits 80 GB with BF16)
+gradient_accumulation_steps: 2    # → effective batch 96
+learning_rate: 3.0e-6
+diffusion_learning_rate: 7.5e-7
+max_steps: 24000                 # ≈ 10 epochs over 205 k frames @ eff-BS 96
+save_steps: 3000                 # save every ~45 min
 
 # Diffusion head -----------------------------------------------------------
 train_diffusion_head: true
@@ -51,4 +51,8 @@ gradient_clip_norm: 0.3
 warmup_steps: 2000                  # 2 k-step LR warm-up (~15 min)
 
 # Misc ---------------------------------------------------------------------
-max_memory_cleanup_steps: 500 
+max_memory_cleanup_steps: 500
+
+# Distributed Training -----------------------------------------------------
+deepspeed_config_path: "ds_config_stage2.json" # Path to DeepSpeed config file
+# Set to null or remove this line to fall back to single-GPU training 

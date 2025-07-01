@@ -1,0 +1,10 @@
+quick hpc commands:
+
+Task:	
+Command
+
+Load Miniconda:	
+    module load python/miniconda3/24.3.0-0
+
+Init conda shell (if needed):
+	source $UCL_CONDA_PATH/etc/profile.d/conda.sh
