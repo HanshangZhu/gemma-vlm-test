@@ -130,3 +130,18 @@ df -h ~/Scratch
 4. **Notification**: Email sent on completion/failure
 
 That's it! Your TinyVLA training should now run smoothly on UCL HPC. 🎉 
+
+Load Miniconda:	
+    module load python/miniconda3/24.3.0-0
+
+Init conda shell (if needed):
+	source $UCL_CONDA_PATH/etc/profile.d/conda.sh
+
+Submit job:
+    qsub SCRIPT.sh
+
+List num_of_jobs_ahead:
+    
+
+List all user submitted job status:
+    qstat -u $USER

@@ -8,6 +8,7 @@
 #$ -N tinyvla-700m-mt50-ds           # Job name (added -ds for DeepSpeed)
 #$ -pe smp 16                        # 16 CPU cores (8 per GPU process)
 #$ -l gpu=2                          # 2 GPUs (A100 queue preferred)
+#$ -ac allow=L
 #$ -l h_rt=48:00:00                  # 48 h wall-clock
 #$ -l mem=8G                         # per-core memory (8G × 16 cores ≈ 128G total)
 #$ -l tmpfs=70G                      # Local NVMe scratch, 50G dataset + 20G for training checkpoints
