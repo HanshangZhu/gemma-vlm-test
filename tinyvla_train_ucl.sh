@@ -7,9 +7,9 @@
 #$ -cwd                              # Execute in the directory qsub is run from
 #$ -N tinyvla-700m-mt50              # Job name
 #$ -pe smp 16                        # 16 CPU cores
-#$ -l gpu=2,gpumem=80G               # 2×80 GB A100s
+#$ -l gpu=2                               # 2 GPUs (A100 queue preferred)
 #$ -l h_rt=48:00:00                  # 48 h wall-clock
-#$ -l mem=125G                       # Total host memory (~8 GB per core + headroom)
+#$ -l mem=8G                          # per-core memory (8G × 16 cores ≈ 128G total)
 #$ -l tmpfs=50G                      # Local NVMe scratch
 # ---- Optional specific queue (uncomment if confirmed online) ----
 # #$ -q Daenerys

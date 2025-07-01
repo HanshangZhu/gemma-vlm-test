@@ -5,7 +5,7 @@
 
 #$ -cwd                               # log/output in the dir you qsub from
 #$ -N tinyvla-test                    # job name
-#$ -l gpu=1,gpumem=80G                # 1 × 80 GB A100
+#$ -l gpu=1                              # 1 GPU (queue decides card type)
 #$ -pe smp 4                          # four CPU cores is plenty
 #$ -l mem=24G                         # ~6 GB per core (adjust if you like)
 #$ -l tmpfs=10G                       # scratch on local NVMe
