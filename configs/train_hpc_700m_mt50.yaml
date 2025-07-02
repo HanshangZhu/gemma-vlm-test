@@ -1,6 +1,6 @@
 # === TinyVLA LoRA training on full MT50 (HPC) =============================
 # Name: train_hpc_700m_mt50.yaml
-# Purpose: run on 2×40 GB A100 (or larger) using BF16, frozen vision tower.
+# Purpose: run on 4×40 GB A100 using BF16, frozen vision tower.
 # -------------------------------------------------------------------------
 # Model / paths
 model_path: lesjie/Llava-Pythia-700M   # 700 M backbone; auto-download once
@@ -18,12 +18,12 @@ lora_alpha: 16
 lora_dropout: 0.05
 
 # Training schedule --------------------------------------------------------
-batch_size: 24                   # PER GPU (fits 80 GB with BF16)
-gradient_accumulation_steps: 2    # → effective batch 96
-learning_rate: 3.0e-6
-diffusion_learning_rate: 7.5e-7
-max_steps: 24000                 # ≈ 10 epochs over 205 k frames @ eff-BS 96
-save_steps: 3000                 # save every ~45 min
+batch_size: 24                   # PER GPU (4 GPUs = 96 per step)
+gradient_accumulation_steps: 2    # → effective batch 192 (4×24×2)
+learning_rate: 5.0e-6             # Scaled up for 4 GPUs and larger batch
+diffusion_learning_rate: 1.2e-6   # Scaled proportionally
+max_steps: 28800                  # 12 epochs over 205k frames @ eff-BS 192
+save_steps: 2400                  # Save every epoch (28800/12 = 2400 steps)
 
 # Diffusion head -----------------------------------------------------------
 train_diffusion_head: true
@@ -41,14 +41,14 @@ chunk_size: 8
 image_size: 336                     # 336×336 CLIP input
 
 # Dataloader ---------------------------------------------------------------
-dataloader_num_workers: 4
+dataloader_num_workers: 8          # Increased for 4 GPUs
 pin_memory: true
 persistent_workers: true
 
 # Optimisation & stability -------------------------------------------------
 weight_decay: 0.01
 gradient_clip_norm: 0.3
-warmup_steps: 2000                  # 2 k-step LR warm-up (~15 min)
+warmup_steps: 2000                  # 2 k-step LR warm-up
 
 # Misc ---------------------------------------------------------------------
 max_memory_cleanup_steps: 500

@@ -1,0 +1,48 @@
+# UCL HPC Quick Commands for TinyVLA Training
+# =============================================
+
+# 1. COPY PROJECT TO HPC
+rsync -av ~/vla-vlm-test/ zcabhz4@myriad.rc.ucl.ac.uk:~/Scratch/vla-vlm-test/
+
+# 2. LOGIN TO UCL HPC
+ssh zcabhz4@myriad.rc.ucl.ac.uk
+
+# 3. JOB SUBMISSION & MONITORING
+qsub test_hpc_env.sh                 # Test environment (30min)
+qsub tinyvla_train_ucl_FIXED.sh      # Full training (48h)
+
+# 4. JOB STATUS
+qstat                                # All your jobs
+qstat -j JOBID                      # Detailed job info
+qstat -u zcabhz4                    # Only your jobs
+
+# 5. LOG MONITORING
+tail -f test_env_JOBID.log          # Follow test log
+tail -f tinyvla_ds_JOBID.log        # Follow training log
+less tinyvla_ds_JOBID.log           # Browse full log
+
+# 6. JOB CONTROL
+qdel JOBID                          # Cancel job
+qhold JOBID                         # Hold job
+qrls JOBID                          # Release held job
+
+# 7. NODE INFORMATION
+qhost                               # Available nodes
+qstat -g c                          # Queue capacities
+qstat -f                           # Full queue info
+
+# 8. STORAGE CHECK
+df -h ~/Scratch                     # Check Scratch space
+du -sh ~/Scratch/vla-vlm-test       # Project size
+ls -la ~/Scratch/vla-vlm-test/ucl_ds_results/  # Training results
+
+# 9. MODULE EXPLORATION (on login node)
+module avail                        # All modules
+module avail cuda                   # CUDA versions
+module avail miniconda              # Conda versions
+module show cuda/11.8              # Module details
+
+# 10. DEBUGGING COMMANDS
+ssh NODE_NAME                       # SSH to compute node (if allowed)
+nvidia-smi                          # GPU status (on compute node)
+top                                 # Process monitor 
